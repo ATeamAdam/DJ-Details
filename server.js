@@ -7,6 +7,7 @@ const { startEmailScraping, setShouldStopScraping } = require('./scrapeEmails');
 const {
   getDJsWithEmailsCount,
   getAllDJs,
+  getDJsForEmailSearch,
   getDJCount,
   getSearchableDJCount,
   createPipelineRun,
@@ -467,7 +468,8 @@ async function startEmailScrapingRun(socket) {
   emailScrapingRunning = true;
   emailScrapingStopRequested = false;
   try {
-    const djs = await getAllDJs();
+    const djs = await getDJsForEmailSearch();
+    emitPipeline(socket, 'emailSearchOutput', `Email search queue contains ${djs.length} stale or missing DJ records.`);
     emailScrapingProcess = startEmailScraping(djs, pipelineEmitter);
     await emailScrapingProcess;
     return true;

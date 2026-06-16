@@ -644,6 +644,34 @@ function getDJsWithEmailsCount() {
   });
 }
 
+function getDJsForEmailSearch() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT *
+       FROM djs
+       WHERE socialMediaUrls IS NOT NULL
+         AND socialMediaUrls <> ''
+         AND socialMediaUrls <> '[]'
+         AND (
+           emails IS NULL
+           OR emails = ''
+           OR emails = '[]'
+           OR emailsUpdatedAt IS NULL
+           OR emailsUpdatedAt < datetime('now', '-90 days')
+         )`,
+      [],
+      (err, rows) => {
+        if (err) {
+          console.error(`Error retrieving DJs for email search: ${err.message}`);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
 function mergeDiscoveryPayload(existingPayload, email, discovery) {
   const payload = existingPayload && typeof existingPayload === 'object' && !Array.isArray(existingPayload)
     ? existingPayload
@@ -836,6 +864,7 @@ module.exports = {
   updateDJ,
   getAllDJs,
   getDJsToUpdate,
+  getDJsForEmailSearch,
   getUniqueCountries,
   getUniqueStyles,
   getDJCount,

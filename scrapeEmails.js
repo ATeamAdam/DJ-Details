@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { updateDJ, getAllDJs } = require('./database');
+const { updateDJ } = require('./database');
 const moment = require('moment');
 
 let shouldStopScraping = false;
