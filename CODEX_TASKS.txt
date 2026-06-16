@@ -1,0 +1,128 @@
+DJ Details Codex Task List
+==========================
+
+Purpose
+-------
+This file is the working task list for Codex. Future Codex sessions should read this file first, choose the next suitable unchecked task, complete it, tick it off, and commit the completed changes.
+
+Operating instructions for Codex
+--------------------------------
+1. Read this file at the start of a DJ Details maintenance session.
+2. Choose the highest-priority unchecked task that can be completed safely.
+3. Complete one task at a time unless tasks are tightly coupled.
+4. When a task is completed, change its checkbox from "[ ]" to "[x]" and add a short completion note/date if useful.
+5. If new follow-up tasks are discovered and cannot be completed immediately, add them to "Discovered follow-up tasks".
+6. Commit completed changes with a clear commit message.
+7. Keep the scraper stable. Do not parallelise the 1001Tracklists alphabet/list scan unless explicitly requested.
+8. Prefer boring, reliable improvements over aggressive speed changes.
+9. Avoid changes that increase CAPTCHA risk unless the user explicitly accepts the tradeoff.
+10. Preserve data. If a task touches database paths, migrations, or runtime storage, avoid destructive operations and add migration/back-up notes where needed.
+
+Recommended strategy
+--------------------
+Keep the 1001Tracklists DJ list scan single-threaded and stable. Improve reliability, visibility, scheduling, persistence, and Magic Emailer integration around it.
+
+Current priority tasks
+----------------------
+[x] Add persistent pipeline run history. Completed 2026-06-17.
+    Create a pipeline_runs table or equivalent persistence that records each full run:
+    - startedAt
+    - finishedAt
+    - status
+    - duration
+    - startLetter
+    - djsFound
+    - newDjs
+    - profilesUpdated
+    - emailsFound
+    - emailsQueuedForMagic
+    - errorSummary
+    The UI should be able to show the last successful run from persisted data, not only server memory.
+
+[ ] Add weekly scheduler and next-run display.
+    Add a configurable weekly background run, for example Sunday at 02:00.
+    The UI should show:
+    - last successful run
+    - next scheduled run
+    - scheduler enabled/disabled
+    - current running state
+    Scheduled runs should use the same full pipeline flow as the button.
+
+[ ] Move runtime DB/profile paths out of OneDrive via configuration.
+    Runtime files should be configurable through environment variables and default to a safer local runtime directory where possible.
+    Consider:
+    - djs.db
+    - Chrome user profile
+    - scraper progress/checkpoint file
+    Avoid breaking existing installs. If moving defaults, document migration clearly.
+
+[ ] Make resume-from-checkpoint the default for unfinished runs.
+    If the previous run did not finish, the main button and scheduler should resume from the checkpoint automatically.
+    Manual starting letter should still be possible when explicitly supplied.
+
+[ ] Add scheduled-run quiet mode.
+    Scheduled runs should use calmer defaults:
+    - minimized/background browser
+    - slower scroll/crawl settings
+    - longer CAPTCHA cooldowns
+    - concise logs
+    Manual runs can remain more verbose.
+
+[ ] Strengthen Magic Emailer sync ledger statuses.
+    Expand or harden the sync ledger to make integration safer:
+    - pending
+    - synced
+    - skipped_already_exists
+    - failed
+    - retry_after
+    - last_error
+    - attempts
+    The sync process should be idempotent and safe to rerun.
+
+[ ] Add contact dedupe and normalization before Magic Emailer sync.
+    Normalize and validate contact data before queueing or syncing:
+    - lower-case email addresses
+    - trim DJ names
+    - canonicalize URLs where practical
+    - dedupe the same email across multiple DJs
+    - flag bad emails
+    - optionally flag role/generic emails if useful
+
+[ ] Make weekly runs incremental.
+    Weekly runs should avoid reprocessing everything:
+    - scan list pages for new DJs
+    - update only stale or missing DJ profiles
+    - search emails only for stale/missing email data
+    - sync only contacts not already synced
+
+[ ] Replace noisy failure streams with health summaries.
+    The UI should still keep useful logs, but repeated noisy messages should be summarized into clearer health states:
+    - CAPTCHA encountered: cooling down
+    - page stalled: saved current DJs and moving on
+    - 1001Tracklists unavailable: retrying later
+    - Chrome restarted after letter to clear memory
+
+[ ] Add run-level summary counters to the UI.
+    The single status panel should expose concise run totals:
+    - DJs scanned
+    - new DJs inserted
+    - DJ profiles updated
+    - emails found
+    - contacts queued for Magic Emailer
+    - skipped/already synced contacts
+
+[ ] Consider cautious parallelism only for later stages.
+    Do not parallelise the alphabet/list scan.
+    If speed is still needed later, consider a small queue for profile/email work only, with low concurrency and polite delays.
+    Suggested maximum:
+    - list scanners: 1
+    - profile/email workers: 2
+
+Completed tasks
+---------------
+- 2026-06-17: Added pipeline_runs persistence, best-effort run history writes, persisted last successful run restoration, and UI display of persisted last-success duration.
+
+Discovered follow-up tasks
+--------------------------
+[ ] Emit exact profile-updated and Magic-sync queued counters into pipeline run history.
+    The pipeline_runs table has fields for profilesUpdated and emailsQueuedForMagic, but the current pipeline does not yet emit exact per-run values for these counters.

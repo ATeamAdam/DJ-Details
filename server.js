@@ -4,7 +4,15 @@ const socketIo = require('socket.io');
 const { scrapeAllDJs, setShouldStopScraper } = require('./scraper');
 const { updateAllDJs, setShouldStopUpdater } = require('./updateDJData');
 const { startEmailScraping, setShouldStopScraping } = require('./scrapeEmails');
-const { getDJsWithEmailsCount, getAllDJs, getDJCount, getSearchableDJCount } = require('./database');
+const {
+  getDJsWithEmailsCount,
+  getAllDJs,
+  getDJCount,
+  getSearchableDJCount,
+  createPipelineRun,
+  updatePipelineRun,
+  getLastSuccessfulPipelineRun
+} = require('./database');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,54 +26,512 @@ let emailScrapingRunning = false;
 let emailScrapingProcess = null;
 let scraperProcess = null;
 let updaterProcess = null;
+let scraperStopRequested = false;
+let updaterStopRequested = false;
+let emailScrapingStopRequested = false;
+
+const PIPELINE_LOG_LIMIT = 300;
+const pipelineAlphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
+const pipelineStageOrder = {
+  idle: 0,
+  scraper: 0,
+  updater: 1,
+  emails: 2,
+  complete: 3
+};
+const pipelineUnitsPerStage = pipelineAlphabet.length;
+const pipelineTotalUnits = pipelineUnitsPerStage * 3;
+
+let pipelineState = {
+  runId: null,
+  running: false,
+  stage: 'idle',
+  progress: 0,
+  label: 'Idle',
+  startLetter: 'a',
+  startedAt: null,
+  endedAt: null,
+  lastRunDurationMs: null,
+  lastSuccessfulRun: null,
+  runStats: {
+    djsFound: 0,
+    newDjs: 0,
+    profilesUpdated: 0,
+    emailsFound: 0,
+    emailsQueuedForMagic: 0
+  },
+  messages: []
+};
+
+function addPipelineMessage(stage, message) {
+  if (!message) return;
+  const text = typeof message === 'string' ? message : JSON.stringify(message);
+  pipelineState.messages.push({
+    time: Date.now(),
+    stage,
+    message: text
+  });
+
+  if (pipelineState.messages.length > PIPELINE_LOG_LIMIT) {
+    pipelineState.messages = pipelineState.messages.slice(-PIPELINE_LOG_LIMIT);
+  }
+}
+
+function setPipelineState(patch) {
+  pipelineState = {
+    ...pipelineState,
+    ...patch
+  };
+}
+
+function setPipelineStageProgress(stage, stagePercent, label) {
+  if (stage === 'complete') {
+    setPipelineState({
+      stage,
+      progress: 100,
+      label: label || 'Complete'
+    });
+    return;
+  }
+
+  const stageIndex = pipelineStageOrder[stage] || 0;
+  const bounded = Math.max(0, Math.min(100, Number(stagePercent) || 0));
+  const stageUnits = (bounded / 100) * pipelineUnitsPerStage;
+  const overall = ((stageIndex * pipelineUnitsPerStage + stageUnits) / pipelineTotalUnits) * 100;
+  setPipelineState({
+    stage,
+    progress: Math.max(pipelineState.progress || 0, overall),
+    label: label || `${stage} (${getPipelineUnit(stage, bounded)}/${pipelineTotalUnits})`
+  });
+}
+
+function getPipelineUnit(stage, percent) {
+  const stageIndex = pipelineStageOrder[stage] || 0;
+  const bounded = Math.max(0, Math.min(100, Number(percent) || 0));
+  return Math.min(
+    pipelineTotalUnits,
+    Math.max(0, Math.floor(stageIndex * pipelineUnitsPerStage + ((bounded / 100) * pipelineUnitsPerStage)))
+  );
+}
+
+function createEmptyRunStats() {
+  return {
+    djsFound: 0,
+    newDjs: 0,
+    profilesUpdated: 0,
+    emailsFound: 0,
+    emailsQueuedForMagic: 0
+  };
+}
+
+function updatePipelineRunStats(patch) {
+  pipelineState.runStats = {
+    ...createEmptyRunStats(),
+    ...(pipelineState.runStats || {}),
+    ...patch
+  };
+}
+
+async function refreshLastSuccessfulRun() {
+  try {
+    const lastSuccessfulRun = await getLastSuccessfulPipelineRun();
+    if (lastSuccessfulRun) {
+      setPipelineState({
+        lastSuccessfulRun,
+        lastRunDurationMs: lastSuccessfulRun.durationMs
+      });
+    }
+    return lastSuccessfulRun;
+  } catch (error) {
+    console.error(`Unable to load last successful pipeline run: ${error.message}`);
+    return null;
+  }
+}
+
+async function startPersistedPipelineRun(startLetter) {
+  try {
+    return await createPipelineRun(startLetter);
+  } catch (error) {
+    console.error(`Unable to create pipeline run history row: ${error.message}`);
+    return null;
+  }
+}
+
+async function finishPersistedPipelineRun(status, errorSummary = null) {
+  if (!pipelineState.runId) return;
+
+  const endedAt = pipelineState.endedAt || Date.now();
+  const durationMs = pipelineState.startedAt ? endedAt - pipelineState.startedAt : null;
+  const stats = {
+    ...createEmptyRunStats(),
+    ...(pipelineState.runStats || {})
+  };
+
+  try {
+    await updatePipelineRun(pipelineState.runId, {
+      status,
+      finishedAt: new Date(endedAt).toISOString(),
+      durationMs,
+      djsFound: stats.djsFound,
+      newDjs: stats.newDjs,
+      profilesUpdated: stats.profilesUpdated,
+      emailsFound: stats.emailsFound,
+      emailsQueuedForMagic: stats.emailsQueuedForMagic,
+      errorSummary
+    });
+
+    if (status === 'success') {
+      await refreshLastSuccessfulRun();
+    }
+  } catch (error) {
+    console.error(`Unable to finish pipeline run history row: ${error.message}`);
+  }
+}
+
+async function emitPipelineSnapshot(socket) {
+  await refreshLastSuccessfulRun();
+  socket.emit('pipelineState', getPipelineSnapshot());
+}
+
+function beginPipelineState(startLetter, runRecord = null) {
+  const lastRunDurationMs = pipelineState.lastRunDurationMs;
+  const lastSuccessfulRun = pipelineState.lastSuccessfulRun;
+  pipelineState = {
+    runId: runRecord ? runRecord.id : null,
+    running: true,
+    stage: 'scraper',
+    progress: 0,
+    label: 'Starting full run',
+    startLetter: startLetter || 'a',
+    startedAt: runRecord ? new Date(runRecord.startedAt).getTime() : Date.now(),
+    endedAt: null,
+    lastRunDurationMs,
+    lastSuccessfulRun,
+    runStats: createEmptyRunStats(),
+    messages: []
+  };
+}
+
+function completePipelineState(label) {
+  const endedAt = Date.now();
+  const duration = pipelineState.startedAt ? endedAt - pipelineState.startedAt : null;
+  setPipelineState({
+    running: false,
+    stage: 'complete',
+    progress: 100,
+    label: label || 'Complete',
+    endedAt,
+    lastRunDurationMs: duration
+  });
+  void finishPersistedPipelineRun('success');
+}
+
+function getPipelineSnapshot() {
+  return {
+    ...pipelineState,
+    running: pipelineState.running || scraperRunning || updaterRunning || emailScrapingRunning,
+    stopRequested: scraperStopRequested || updaterStopRequested || emailScrapingStopRequested,
+    messages: [...pipelineState.messages]
+  };
+}
+
+function updatePipelineFromScraperMessage(message) {
+  const text = String(message || '');
+  const completed = text.match(/Completed fetching DJs for '([a-z0-9])'/i);
+  const fetching = text.match(/Fetching DJs starting with '([a-z0-9])'/i);
+  const match = completed || fetching;
+  if (!match) return;
+
+  const letter = match[1].toLowerCase();
+  const index = pipelineAlphabet.indexOf(letter);
+  if (index < 0) return;
+
+  const completedUnits = index + (completed ? 1 : 0);
+  const stagePercent = (completedUnits / pipelineUnitsPerStage) * 100;
+  const currentUnit = Math.min(pipelineTotalUnits, completedUnits + (fetching ? 1 : 0));
+  const action = completed ? 'Scanned' : 'Scanning';
+
+  setPipelineStageProgress(
+    'scraper',
+    stagePercent,
+    `${action} ${letter.toUpperCase()} (${currentUnit}/${pipelineTotalUnits})`
+  );
+}
+
+function recordPipelineEvent(event, data) {
+  switch (event) {
+    case 'scraperOutput':
+      setPipelineState({ stage: 'scraper' });
+      addPipelineMessage('scraper', data);
+      updatePipelineFromScraperMessage(data);
+      break;
+    case 'scraperStatus': {
+      const currentDJ = data && data.currentDJ;
+      const processedCount = data && data.processedCount;
+      const newDJCount = data && data.newDJCount;
+      updatePipelineRunStats({
+        djsFound: Math.max(pipelineState.runStats?.djsFound || 0, Number(processedCount) || 0),
+        newDjs: Math.max(pipelineState.runStats?.newDjs || 0, Number(newDJCount) || 0)
+      });
+      setPipelineState({
+        stage: 'scraper',
+        label: currentDJ
+          ? `Scanning: ${currentDJ}`
+          : `Scanning ${processedCount || 0} processed / ${newDJCount || 0} new`
+      });
+      break;
+    }
+    case 'scraperError':
+      setPipelineState({ stage: 'scraper', label: 'Scanner needs attention' });
+      addPipelineMessage('scraper', `Scraper: ${data}`);
+      break;
+    case 'scraperComplete':
+      setPipelineStageProgress('scraper', 100, 'Scanning complete');
+      addPipelineMessage('scraper', data);
+      break;
+    case 'scraperStopped':
+      setPipelineState({ running: false, stage: 'scraper', label: 'Stopped', endedAt: Date.now() });
+      addPipelineMessage('scraper', data);
+      void finishPersistedPipelineRun('stopped', data || 'Scraper stopped.');
+      break;
+    case 'updaterOutput':
+      setPipelineStageProgress('updater', 0, `Updating DJ data (${getPipelineUnit('updater', 0)}/${pipelineTotalUnits})`);
+      addPipelineMessage('updater', data);
+      break;
+    case 'updaterError':
+      setPipelineState({ stage: 'updater', label: 'Updater needs attention' });
+      addPipelineMessage('updater', `Updater: ${data}`);
+      break;
+    case 'updateProgress':
+      setPipelineStageProgress('updater', data, `Updating DJ data (${getPipelineUnit('updater', data)}/${pipelineTotalUnits})`);
+      break;
+    case 'updaterComplete':
+      setPipelineStageProgress('updater', 100, 'DJ data updated');
+      addPipelineMessage('updater', data);
+      break;
+    case 'updaterStopped':
+      setPipelineState({ running: false, stage: 'updater', label: 'Stopped', endedAt: Date.now() });
+      addPipelineMessage('updater', data);
+      void finishPersistedPipelineRun('stopped', data || 'Updater stopped.');
+      break;
+    case 'emailScrapingStarted':
+      setPipelineStageProgress('emails', 0, `Searching emails (${getPipelineUnit('emails', 0)}/${pipelineTotalUnits})`);
+      addPipelineMessage('emails', data);
+      break;
+    case 'emailSearchOutput':
+      setPipelineStageProgress('emails', 0, `Searching emails (${getPipelineUnit('emails', 0)}/${pipelineTotalUnits})`);
+      addPipelineMessage('emails', data);
+      break;
+    case 'emailScrapingError':
+      setPipelineState({ stage: 'emails', label: 'Email search needs attention' });
+      addPipelineMessage('emails', `Email search: ${data}`);
+      break;
+    case 'emailsFound':
+      if (data && data.dj && Array.isArray(data.emails)) {
+        updatePipelineRunStats({
+          emailsFound: (pipelineState.runStats?.emailsFound || 0) + data.emails.length
+        });
+        addPipelineMessage('emails', `Found emails for ${data.dj}: ${data.emails.join(', ')}`);
+      }
+      break;
+    case 'emailsSaved':
+      if (data && data.dj && Array.isArray(data.emails)) {
+        addPipelineMessage('emails', `Emails saved for ${data.dj}: ${data.emails.length}`);
+      }
+      break;
+    case 'scrapingProgress':
+      setPipelineStageProgress('emails', data, `Searching emails (${getPipelineUnit('emails', data)}/${pipelineTotalUnits})`);
+      break;
+    case 'scrapingComplete':
+      completePipelineState('Complete');
+      addPipelineMessage('emails', data);
+      break;
+    case 'emailScrapingStopped':
+      setPipelineState({ running: false, stage: 'emails', label: 'Stopped', endedAt: Date.now() });
+      addPipelineMessage('emails', data);
+      void finishPersistedPipelineRun('stopped', data || 'Email scraping stopped.');
+      break;
+    default:
+      break;
+  }
+}
+
+const pipelineEmitter = {
+  emit(event, ...args) {
+    recordPipelineEvent(event, args[0]);
+    io.emit(event, ...args);
+  }
+};
+
+function emitPipeline(socket, event, data) {
+  recordPipelineEvent(event, data);
+  socket.emit(event, data);
+}
+
+async function startEmailScrapingRun(socket) {
+  if (emailScrapingRunning) {
+    emitPipeline(socket, 'emailSearchOutput', 'Email scraping is already running.');
+    return false;
+  }
+
+  emailScrapingRunning = true;
+  emailScrapingStopRequested = false;
+  try {
+    const djs = await getAllDJs();
+    emailScrapingProcess = startEmailScraping(djs, pipelineEmitter);
+    await emailScrapingProcess;
+    return true;
+  } catch (err) {
+    emitPipeline(socket, 'emailScrapingError', `Email scraping exited with error: ${err.message}`);
+    setPipelineState({ running: false, endedAt: Date.now() });
+    await finishPersistedPipelineRun('failed', `Email scraping exited with error: ${err.message}`);
+    return false;
+  } finally {
+    emailScrapingRunning = false;
+    emailScrapingProcess = null;
+  }
+}
+
+async function startUpdaterRun(socket, options = {}) {
+  const autoStartEmails = options.autoStartEmails !== false;
+
+  if (scraperRunning) {
+    emitPipeline(socket, 'updaterError', 'Scraper is currently running. Stop it before starting the updater so Chrome can reuse the same 1001 session safely.');
+    return false;
+  }
+
+  if (updaterRunning) {
+    emitPipeline(socket, 'updaterOutput', 'Updater is already running.');
+    return false;
+  }
+
+  updaterRunning = true;
+  updaterStopRequested = false;
+  let completedNormally = false;
+  try {
+    updaterProcess = updateAllDJs(pipelineEmitter);
+    await updaterProcess;
+    if (!updaterStopRequested) {
+      emitPipeline(socket, 'updaterComplete', 'Updater completed successfully.');
+    }
+    completedNormally = !updaterStopRequested;
+  } catch (err) {
+    emitPipeline(socket, 'updaterError', `Updater exited with error: ${err.message}`);
+    setPipelineState({ running: false, endedAt: Date.now() });
+    await finishPersistedPipelineRun('failed', `Updater exited with error: ${err.message}`);
+    return false;
+  } finally {
+    updaterRunning = false;
+    updaterProcess = null;
+  }
+
+  if (updaterStopRequested) {
+    emitPipeline(socket, 'updaterStopped', 'Updater has been stopped.');
+    return false;
+  }
+
+  if (completedNormally && autoStartEmails) {
+    emitPipeline(socket, 'emailSearchOutput', 'DJ data updater finished. Starting email scraping automatically...');
+    await startEmailScrapingRun(socket);
+  }
+
+  return completedNormally;
+}
+
+async function startPipelineRun(socket, startLetter) {
+  if (scraperRunning || updaterRunning || emailScrapingRunning) {
+    emitPipeline(socket, 'scraperOutput', 'A full run is already in progress.');
+    return;
+  }
+
+  const effectiveStartLetter = startLetter || 'a';
+  const runRecord = await startPersistedPipelineRun(effectiveStartLetter);
+  beginPipelineState(effectiveStartLetter, runRecord);
+  emitPipeline(socket, 'scraperOutput', `Starting end-to-end run from letter "${effectiveStartLetter}".`);
+  scraperRunning = true;
+  scraperStopRequested = false;
+  try {
+    scraperProcess = scrapeAllDJs(startLetter, pipelineEmitter);
+    await scraperProcess;
+    if (!scraperStopRequested) {
+      emitPipeline(socket, 'scraperComplete', 'Scraper completed successfully.');
+    }
+  } catch (err) {
+    emitPipeline(socket, 'scraperError', `Scraper exited with error: ${err.message}`);
+    setPipelineState({ running: false, endedAt: Date.now() });
+    await finishPersistedPipelineRun('failed', `Scraper exited with error: ${err.message}`);
+    return;
+  } finally {
+    scraperRunning = false;
+    scraperProcess = null;
+  }
+
+  if (scraperStopRequested) {
+    emitPipeline(socket, 'scraperStopped', 'Scraper has been stopped.');
+    return;
+  }
+
+  if (!scraperStopRequested && !updaterRunning) {
+    emitPipeline(socket, 'updaterOutput', 'Scraper finished. Starting DJ data updater automatically...');
+    await startUpdaterRun(socket);
+  }
+}
+
+function stopPipelineRun(socket) {
+  if (scraperRunning && scraperProcess) {
+    scraperStopRequested = true;
+    setShouldStopScraper(true);
+    emitPipeline(socket, 'scraperOutput', 'Stop requested. Waiting for the scraper to finish its current step...');
+    return;
+  }
+
+  if (updaterRunning && updaterProcess) {
+    updaterStopRequested = true;
+    setShouldStopUpdater(true);
+    emitPipeline(socket, 'updaterOutput', 'Stop requested. Waiting for the updater to finish its current step...');
+    return;
+  }
+
+  if (emailScrapingRunning && emailScrapingProcess) {
+    emailScrapingStopRequested = true;
+    setShouldStopScraping(true);
+    emitPipeline(socket, 'emailScrapingStopped', 'Email scraping has been stopped.');
+    return;
+  }
+
+  emitPipeline(socket, 'scraperOutput', 'No full run is currently running.');
+}
 
 io.on('connection', (socket) => {
   console.log('New client connected');
+  void emitPipelineSnapshot(socket);
+
+  socket.on('startPipeline', async (startLetter) => {
+    await startPipelineRun(socket, startLetter || 'a');
+  });
+
+  socket.on('stopPipeline', () => {
+    stopPipelineRun(socket);
+  });
+
+  socket.on('getPipelineState', () => {
+    void emitPipelineSnapshot(socket);
+  });
 
   socket.on('startScraper', async (startLetter) => {
-    if (!scraperRunning) {
-      scraperRunning = true;
-      try {
-        scraperProcess = scrapeAllDJs(startLetter, io);
-        await scraperProcess;
-        socket.emit('scraperComplete', 'Scraper completed successfully.');
-      } catch (err) {
-        socket.emit('scraperError', `Scraper exited with error: ${err.message}`);
-      } finally {
-        scraperRunning = false;
-      }
-    }
+    await startPipelineRun(socket, startLetter || 'a');
   });
 
   socket.on('stopScraper', () => {
-    if (scraperRunning && scraperProcess) {
-      setShouldStopScraper(true);
-      scraperRunning = false;
-      socket.emit('scraperStopped', 'Scraper has been stopped.');
-    }
+    stopPipelineRun(socket);
   });
 
   socket.on('startUpdater', async () => {
-    if (!updaterRunning) {
-      updaterRunning = true;
-      try {
-        updaterProcess = updateAllDJs(io);
-        await updaterProcess;
-        socket.emit('updaterComplete', 'Updater completed successfully.');
-      } catch (err) {
-        socket.emit('updaterError', `Updater exited with error: ${err.message}`);
-      } finally {
-        updaterRunning = false;
-      }
-    }
+    await startUpdaterRun(socket);
   });
 
   socket.on('stopUpdater', () => {
-    if (updaterRunning && updaterProcess) {
-      setShouldStopUpdater(true);
-      updaterRunning = false;
-      socket.emit('updaterStopped', 'Updater has been stopped.');
-    }
+    stopPipelineRun(socket);
   });
 
   socket.on('getDJData', async (filters) => {
@@ -103,34 +569,19 @@ io.on('connection', (socket) => {
   socket.on('filterDJsForEmails', async (filters) => {
     try {
       const djs = await getAllDJs(filters);
-      startEmailScraping(djs, io); // Use startEmailScraping instead of processDJsForEmails
+      startEmailScraping(djs, pipelineEmitter);
     } catch (error) {
       console.error('Error filtering DJs for emails:', error.message);
-      socket.emit('emailScrapingStarted', `Error filtering DJs for emails: ${error.message}`);
+      emitPipeline(socket, 'emailScrapingStarted', `Error filtering DJs for emails: ${error.message}`);
     }
   });
 
   socket.on('startEmailScraping', async () => {
-    if (!emailScrapingRunning) {
-      emailScrapingRunning = true;
-      try {
-        const djs = await getAllDJs();
-        startEmailScraping(djs, io);
-        socket.emit('emailScrapingStarted', 'Email scraping started.');
-      } catch (err) {
-        socket.emit('emailScrapingError', `Email scraping exited with error: ${err.message}`);
-        emailScrapingRunning = false;
-      }
-    }
+    await startEmailScrapingRun(socket);
   });
   
   socket.on('stopEmailScraping', () => {
-    emailScrapingRunning = true;
-    if (emailScrapingRunning) {
-      setShouldStopScraping(true);
-      emailScrapingRunning = false;
-      socket.emit('emailScrapingStopped', 'Email scraping has been stopped.');
-    }
+    stopPipelineRun(socket);
   });
   
   // New handler to get the count of DJs with email addresses

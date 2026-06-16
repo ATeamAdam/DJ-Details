@@ -1,5 +1,59 @@
+const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('./djs.db');
+
+const DB_PATH = path.join(__dirname, 'djs.db');
+const db = new sqlite3.Database(DB_PATH);
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(err) {
+      if (err) return reject(err);
+      resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
+
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) return reject(err);
+      resolve(row);
+    });
+  });
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows);
+    });
+  });
+}
+
+function parseJsonValue(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function cleanEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  return emailPattern.test(email) ? email : '';
+}
+
+function cleanStringArray(value) {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  ));
+}
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS djs (
@@ -10,11 +64,33 @@ db.serialize(() => {
     socialMediaUrls TEXT,
     musicStyles TEXT,
     lastUpdated DATE,
+    profileUpdatedAt TEXT,
+    emailsUpdatedAt TEXT,
+    magicSyncedAt TEXT,
     emails TEXT,
+    emailSources TEXT,
     UNIQUE(name, url)
   )`, (err) => {
     if (err) {
       console.error('Error creating table:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_djs_name ON djs(name)", (err) => {
+    if (err) {
+      console.error('Error creating djs name index:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_djs_url ON djs(url)", (err) => {
+    if (err) {
+      console.error('Error creating djs url index:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_djs_emails_present ON djs(emails) WHERE emails IS NOT NULL AND emails <> '' AND emails <> '[]'", (err) => {
+    if (err) {
+      console.error('Error creating djs emails index:', err.message);
     }
   });
 
@@ -37,9 +113,183 @@ db.serialize(() => {
           }
         });
       }
+      if (!columns.includes('emailSources')) {
+        db.run("ALTER TABLE djs ADD COLUMN emailSources TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column emailSources:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('profileUpdatedAt')) {
+        db.run("ALTER TABLE djs ADD COLUMN profileUpdatedAt TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column profileUpdatedAt:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('emailsUpdatedAt')) {
+        db.run("ALTER TABLE djs ADD COLUMN emailsUpdatedAt TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column emailsUpdatedAt:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('magicSyncedAt')) {
+        db.run("ALTER TABLE djs ADD COLUMN magicSyncedAt TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column magicSyncedAt:', err.message);
+          }
+        });
+      }
+    }
+  });
+
+  db.run(`CREATE TABLE IF NOT EXISTS magic_emailer_sync (
+    email TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'synced', 'failed', 'skipped')),
+    payload TEXT NOT NULL DEFAULT '{}',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    synced_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`, (err) => {
+    if (err) {
+      console.error('Error creating magic_emailer_sync table:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_status ON magic_emailer_sync(status, updated_at)", (err) => {
+    if (err) {
+      console.error('Error creating magic_emailer_sync status index:', err.message);
+    }
+  });
+
+  db.run(`CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running'
+      CHECK (status IN ('running', 'success', 'failed', 'stopped')),
+    duration_ms INTEGER,
+    start_letter TEXT,
+    djs_found INTEGER NOT NULL DEFAULT 0,
+    new_djs INTEGER NOT NULL DEFAULT 0,
+    profiles_updated INTEGER NOT NULL DEFAULT 0,
+    emails_found INTEGER NOT NULL DEFAULT 0,
+    emails_queued_for_magic INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`, (err) => {
+    if (err) {
+      console.error('Error creating pipeline_runs table:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status_finished ON pipeline_runs(status, finished_at)", (err) => {
+    if (err) {
+      console.error('Error creating pipeline_runs status index:', err.message);
     }
   });
 });
+
+function mapPipelineRun(row) {
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status,
+    durationMs: row.duration_ms,
+    startLetter: row.start_letter,
+    djsFound: row.djs_found,
+    newDjs: row.new_djs,
+    profilesUpdated: row.profiles_updated,
+    emailsFound: row.emails_found,
+    emailsQueuedForMagic: row.emails_queued_for_magic,
+    errorSummary: row.error_summary
+  };
+}
+
+async function createPipelineRun(startLetter) {
+  const startedAt = new Date().toISOString();
+  const result = await run(
+    `INSERT INTO pipeline_runs (
+       started_at,
+       status,
+       start_letter,
+       created_at,
+       updated_at
+     )
+     VALUES (?, 'running', ?, datetime('now'), datetime('now'))`,
+    [startedAt, startLetter || null]
+  );
+
+  return {
+    id: result.lastID,
+    startedAt
+  };
+}
+
+async function updatePipelineRun(id, updates = {}) {
+  if (!id) return null;
+
+  const fields = {
+    finishedAt: 'finished_at',
+    status: 'status',
+    durationMs: 'duration_ms',
+    startLetter: 'start_letter',
+    djsFound: 'djs_found',
+    newDjs: 'new_djs',
+    profilesUpdated: 'profiles_updated',
+    emailsFound: 'emails_found',
+    emailsQueuedForMagic: 'emails_queued_for_magic',
+    errorSummary: 'error_summary'
+  };
+
+  const assignments = [];
+  const params = [];
+
+  Object.entries(fields).forEach(([key, column]) => {
+    if (updates[key] !== undefined) {
+      assignments.push(`${column} = ?`);
+      params.push(updates[key]);
+    }
+  });
+
+  if (assignments.length === 0) return null;
+
+  assignments.push("updated_at = datetime('now')");
+  params.push(id);
+
+  await run(
+    `UPDATE pipeline_runs
+     SET ${assignments.join(', ')}
+     WHERE id = ?`,
+    params
+  );
+
+  return getPipelineRun(id);
+}
+
+async function getPipelineRun(id) {
+  const row = await get("SELECT * FROM pipeline_runs WHERE id = ?", [id]);
+  return mapPipelineRun(row);
+}
+
+async function getLastSuccessfulPipelineRun() {
+  const row = await get(
+    `SELECT *
+     FROM pipeline_runs
+     WHERE status = 'success'
+     ORDER BY finished_at DESC, id DESC
+     LIMIT 1`
+  );
+  return mapPipelineRun(row);
+}
 
 function insertDJ(name, url) {
   return new Promise((resolve, reject) => {
@@ -68,11 +318,37 @@ function checkDJExists(name, url) {
   });
 }
 
-function updateDJ(id, country, socialMediaUrls, musicStyles, emails) {
+function updateDJ(id, country, socialMediaUrls, musicStyles, emails, emailSources) {
+  const profileWasUpdated = [country, socialMediaUrls, musicStyles]
+    .some(value => value !== undefined && value !== null);
+  const emailsWereUpdated = [emails, emailSources]
+    .some(value => value !== undefined && value !== null);
+
   return new Promise((resolve, reject) => {
     db.run(
-      "UPDATE djs SET country = ?, socialMediaUrls = ?, musicStyles = ?, emails = ?, lastUpdated = DATE('now') WHERE id = ?",
-      [country, socialMediaUrls, musicStyles, emails, id],
+      `UPDATE djs
+       SET
+        country = COALESCE(?, country),
+        socialMediaUrls = COALESCE(?, socialMediaUrls),
+        musicStyles = COALESCE(?, musicStyles),
+        emails = COALESCE(?, emails),
+        emailSources = COALESCE(?, emailSources),
+        profileUpdatedAt = CASE WHEN ? THEN datetime('now') ELSE profileUpdatedAt END,
+        emailsUpdatedAt = CASE WHEN ? THEN datetime('now') ELSE emailsUpdatedAt END,
+        lastUpdated = CASE WHEN ? OR ? THEN DATE('now') ELSE lastUpdated END
+       WHERE id = ?`,
+      [
+        country,
+        socialMediaUrls,
+        musicStyles,
+        emails,
+        emailSources,
+        profileWasUpdated ? 1 : 0,
+        emailsWereUpdated ? 1 : 0,
+        profileWasUpdated ? 1 : 0,
+        emailsWereUpdated ? 1 : 0,
+        id
+      ],
       function(err) {
         if (err) {
           console.error(`Error updating DJ: ${id} - ${err.message}`);
@@ -111,7 +387,10 @@ function getAllDJs(filters = {}) {
 function getDJsToUpdate() {
   return new Promise((resolve, reject) => {
     db.all(
-      "SELECT * FROM djs WHERE lastUpdated IS NULL OR lastUpdated < DATE('now', '-28 days')",
+      `SELECT *
+       FROM djs
+       WHERE COALESCE(profileUpdatedAt, lastUpdated) IS NULL
+          OR COALESCE(profileUpdatedAt, lastUpdated) < datetime('now', '-28 days')`,
       [],
       (err, rows) => {
         if (err) {
@@ -208,6 +487,170 @@ function getDJsWithEmailsCount() {
   });
 }
 
+function mergeDiscoveryPayload(existingPayload, email, discovery) {
+  const payload = existingPayload && typeof existingPayload === 'object' && !Array.isArray(existingPayload)
+    ? existingPayload
+    : {};
+
+  const discoveries = Array.isArray(payload.discoveries)
+    ? payload.discoveries
+    : [];
+
+  const nextDiscoveries = [...discoveries];
+  const existingIndex = nextDiscoveries.findIndex(item =>
+    Number(item.djId) === Number(discovery.djId) ||
+    (item.djUrl && discovery.djUrl && item.djUrl === discovery.djUrl)
+  );
+
+  if (existingIndex >= 0) {
+    const current = nextDiscoveries[existingIndex];
+    nextDiscoveries[existingIndex] = {
+      ...current,
+      ...discovery,
+      foundOnUrls: cleanStringArray([
+        ...(Array.isArray(current.foundOnUrls) ? current.foundOnUrls : []),
+        ...(Array.isArray(discovery.foundOnUrls) ? discovery.foundOnUrls : [])
+      ]),
+      socialMediaUrls: cleanStringArray([
+        ...(Array.isArray(current.socialMediaUrls) ? current.socialMediaUrls : []),
+        ...(Array.isArray(discovery.socialMediaUrls) ? discovery.socialMediaUrls : [])
+      ]),
+      country: cleanStringArray([
+        ...(Array.isArray(current.country) ? current.country : []),
+        ...(Array.isArray(discovery.country) ? discovery.country : [])
+      ]),
+      musicStyles: cleanStringArray([
+        ...(Array.isArray(current.musicStyles) ? current.musicStyles : []),
+        ...(Array.isArray(discovery.musicStyles) ? discovery.musicStyles : [])
+      ])
+    };
+  } else {
+    nextDiscoveries.push(discovery);
+  }
+
+  return {
+    email,
+    source: 'dj_discovery',
+    discoveries: nextDiscoveries
+  };
+}
+
+function buildMagicSyncDiscovery(dj, email) {
+  const emailSources = parseJsonValue(dj.emailSources, {});
+  const country = parseJsonValue(dj.country, []);
+  const musicStyles = parseJsonValue(dj.musicStyles, []);
+  const socialMediaUrls = parseJsonValue(dj.socialMediaUrls, []);
+
+  return {
+    djId: dj.id,
+    djName: dj.name || '',
+    djUrl: dj.url || '',
+    foundOnUrls: cleanStringArray(emailSources[email] || []),
+    country: cleanStringArray(country),
+    musicStyles: cleanStringArray(musicStyles),
+    socialMediaUrls: cleanStringArray(socialMediaUrls)
+  };
+}
+
+async function queueMagicEmailerSyncContacts() {
+  const rows = await all(`
+    SELECT *
+    FROM djs
+    WHERE emails IS NOT NULL
+      AND emails <> ''
+      AND emails <> '[]'
+  `);
+
+  const summary = {
+    scannedDjs: rows.length,
+    discoveries: 0,
+    queued: 0,
+    updated: 0,
+    skippedSynced: 0,
+    invalidEmails: 0
+  };
+
+  for (const dj of rows) {
+    const emails = parseJsonValue(dj.emails, []);
+    const rawEmails = Array.isArray(emails) ? emails : [];
+    const cleanedEmailValues = rawEmails.map(cleanEmail);
+    const cleanEmails = Array.from(new Set(
+      cleanedEmailValues.filter(Boolean)
+    ));
+
+    summary.invalidEmails += cleanedEmailValues.filter(email => !email).length;
+
+    for (const email of cleanEmails) {
+      summary.discoveries++;
+      const existing = await get(
+        "SELECT email, status, payload FROM magic_emailer_sync WHERE email = ?",
+        [email]
+      );
+
+      if (existing?.status === 'synced') {
+        summary.skippedSynced++;
+        continue;
+      }
+
+      const existingPayload = parseJsonValue(existing?.payload, {});
+      const payload = mergeDiscoveryPayload(
+        existingPayload,
+        email,
+        buildMagicSyncDiscovery(dj, email)
+      );
+
+      if (existing) {
+        await run(
+          `UPDATE magic_emailer_sync
+           SET payload = ?,
+               status = CASE WHEN status = 'skipped' THEN status ELSE 'pending' END,
+               updated_at = datetime('now')
+           WHERE email = ?`,
+          [JSON.stringify(payload), email]
+        );
+        summary.updated++;
+      } else {
+        await run(
+          `INSERT INTO magic_emailer_sync (
+             email,
+             status,
+             payload,
+             attempts,
+             created_at,
+             updated_at
+           )
+           VALUES (?, 'pending', ?, 0, datetime('now'), datetime('now'))`,
+          [email, JSON.stringify(payload)]
+        );
+        summary.queued++;
+      }
+    }
+  }
+
+  return summary;
+}
+
+function getMagicEmailerSyncStats() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT status, COUNT(*) AS count
+       FROM magic_emailer_sync
+       GROUP BY status`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows.reduce((stats, row) => {
+            stats[row.status] = row.count;
+            return stats;
+          }, { pending: 0, synced: 0, failed: 0, skipped: 0 }));
+        }
+      }
+    );
+  });
+}
+
 module.exports = {
   insertDJ,
   checkDJExists,
@@ -219,5 +662,11 @@ module.exports = {
   getDJCount,
   getSearchableDJCount,
   getDJStats,
-  getDJsWithEmailsCount
+  getDJsWithEmailsCount,
+  queueMagicEmailerSyncContacts,
+  getMagicEmailerSyncStats,
+  createPipelineRun,
+  updatePipelineRun,
+  getPipelineRun,
+  getLastSuccessfulPipelineRun
 };
