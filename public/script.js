@@ -534,6 +534,11 @@ socket.on('scrapingProgress', (percentage) => {
 });
 
 socket.on('scrapingComplete', (data) => {
+  setStageProgress('emails', 100, 'Email search complete');
+  appendStatus(data);
+});
+
+socket.on('pipelineComplete', (data) => {
   finishPipeline(data);
 });
 

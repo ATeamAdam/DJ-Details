@@ -485,6 +485,10 @@ function recordPipelineEvent(event, data) {
       setPipelineStageProgress('emails', data, `Searching emails (${getPipelineUnit('emails', data)}/${pipelineTotalUnits})`);
       break;
     case 'scrapingComplete':
+      setPipelineStageProgress('emails', 100, 'Email search complete');
+      addPipelineMessage('emails', data);
+      break;
+    case 'pipelineComplete':
       completePipelineState('Complete');
       addPipelineMessage('emails', data);
       break;
@@ -528,6 +532,7 @@ async function startEmailScrapingRun(socket) {
     if (!emailScrapingStopRequested) {
       const magicSummary = await queueMagicEmailerSyncContacts();
       emitPipeline(socket, 'magicSyncQueued', magicSummary);
+      emitPipeline(socket, 'pipelineComplete', 'Full pipeline completed successfully.');
     }
     return true;
   } catch (err) {

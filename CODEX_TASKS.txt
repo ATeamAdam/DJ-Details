@@ -24,7 +24,7 @@ Keep the 1001Tracklists DJ list scan single-threaded and stable. Improve reliabi
 
 Current priority tasks
 ----------------------
-[ ] Fix pipeline completion ordering and persisted Magic queue counters.
+[x] Fix pipeline completion ordering and persisted Magic queue counters. Completed 2026-06-17.
     The email stage currently emits "scrapingComplete" before the Magic Emailer queue summary is generated.
     This can make the UI and pipeline_runs table mark the run complete before emailsQueuedForMagic/skippedSynced are persisted.
     Implement this so completion has one finalization point:
@@ -176,6 +176,7 @@ Completed tasks
 - 2026-06-17: Replaced noisy repeated pipeline messages with summarized health states and repeat counters in both live UI logs and reconnect snapshots.
 - 2026-06-17: Added run-level UI counters for DJs scanned, new DJs, profiles updated, emails found, Magic queued, and skipped/synced contacts, backed by pipeline run stats where available.
 - 2026-06-17: Connected exact profile-updated and Magic queue summary counters into full-pipeline run stats, persisted history, and live UI counters.
+- 2026-06-17: Fixed pipeline completion ordering so email scraping completion no longer finalizes the run before Magic queue counters are emitted and persisted.
 
 - 2026-06-17: Added DJ profile failure tracking with retry-after backoff, failure metadata columns, stale-profile retry filtering, and automatic clearing after successful updates.
 
