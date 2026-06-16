@@ -17,6 +17,35 @@ const searchableCountRefreshEvery = Math.max(1, Number(process.env.UPDATER_COUNT
 const chromeProfileDir = process.env.CHROME_PROFILE_DIR ||
   path.join(__dirname, 'chrome-user-data', '1001tracklists');
 const chromeWindowMode = (process.env.UPDATER_CHROME_WINDOW_MODE || process.env.SCRAPER_CHROME_WINDOW_MODE || 'minimized').toLowerCase();
+let updaterQuietMode = false;
+
+function setUpdaterQuietMode(value) {
+  updaterQuietMode = Boolean(value);
+}
+
+function getProfileDelay() {
+  return updaterQuietMode
+    ? Number(process.env.SCHEDULED_UPDATER_PROFILE_DELAY_MS) || Math.max(profileDelay, 12000)
+    : profileDelay;
+}
+
+function getProfileScrollDelay() {
+  return updaterQuietMode
+    ? Number(process.env.SCHEDULED_UPDATER_SCROLL_DELAY_MS) || Math.max(profileScrollDelay, 3500)
+    : profileScrollDelay;
+}
+
+function getCaptchaPollDelay() {
+  return updaterQuietMode
+    ? Number(process.env.SCHEDULED_UPDATER_CAPTCHA_POLL_MS) || Math.max(captchaPollDelay, 10000)
+    : captchaPollDelay;
+}
+
+function getCaptchaCooldownMs() {
+  return updaterQuietMode
+    ? Number(process.env.SCHEDULED_UPDATER_CAPTCHA_COOLDOWN_MS) || Math.max(captchaCooldownMs, 600000)
+    : captchaCooldownMs;
+}
 
 function jitter(baseMs, spreadMs = 700) {
   const spread = Math.max(0, spreadMs);
@@ -135,17 +164,18 @@ async function detectAccessChallenge(driver) {
 }
 
 async function cooldownAfterChallenge(io) {
-  const seconds = Math.round(captchaCooldownMs / 1000);
+  const cooldownMs = getCaptchaCooldownMs();
+  const seconds = Math.round(cooldownMs / 1000);
   io.emit('updaterOutput', `Access challenge detected. Cooling down for ${seconds} seconds before continuing.`);
 
   const startedAt = Date.now();
-  while (!stopSignal && Date.now() - startedAt < captchaCooldownMs) {
+  while (!stopSignal && Date.now() - startedAt < cooldownMs) {
     const elapsed = Date.now() - startedAt;
-    const remaining = Math.max(0, Math.ceil((captchaCooldownMs - elapsed) / 1000));
+    const remaining = Math.max(0, Math.ceil((cooldownMs - elapsed) / 1000));
     if (remaining > 0 && remaining % 60 === 0) {
       io.emit('updaterOutput', `Cooldown still active. About ${remaining} seconds remaining.`);
     }
-    await politeSleep(Math.min(10000, Math.max(1000, captchaCooldownMs - elapsed)));
+    await politeSleep(Math.min(10000, Math.max(1000, cooldownMs - elapsed)));
   }
 }
 
@@ -166,10 +196,10 @@ async function waitForCaptchaToBeSolved(driver, io) {
     if (!stillChallenged) {
       console.log("Access challenge cleared. Resuming gently...");
       io.emit('updaterOutput', `Access challenge cleared. Resuming gently...`);
-      await politeSleep(profileDelay);
+      await politeSleep(getProfileDelay());
       break;
     }
-    await politeSleep(captchaPollDelay);
+    await politeSleep(getCaptchaPollDelay());
   }
 }
 
@@ -190,7 +220,7 @@ async function scrollToBottom(driver, io) {
       isInitialScroll = false;
     }
     await driver.executeScript('window.scrollBy(0, Math.floor(window.innerHeight * 0.8));');
-    await politeSleep(profileScrollDelay);
+    await politeSleep(getProfileScrollDelay());
     if (stopSignal) break;
     await checkForCaptcha(driver, io);
     if (stopSignal) break;
@@ -267,7 +297,7 @@ async function fetchDJDataWithRetries(dj, driver, io) {
       console.error(`Attempt ${attempt} - Error fetching DJ data for ${dj.name}:`, error.message);
       io.emit('updaterError', `Attempt ${attempt} - Error fetching DJ data for ${dj.name}: ${error.message}`);
       if (attempt === 3) throw error;
-      await politeSleep(profileDelay);
+      await politeSleep(getProfileDelay());
     }
   }
 }
@@ -362,7 +392,7 @@ async function updateAllDJs(io) {
         io.emit('updateSearchableDJCount', searchableDJCount);
       }
 
-      await politeSleep(profileDelay);
+      await politeSleep(getProfileDelay());
     }
   } finally {
     await quitChromeDriver(driver, io);
@@ -380,4 +410,4 @@ function setShouldStopUpdater(value) {
   stopSignal = value;
 }
 
-module.exports = { updateAllDJs, setShouldStopUpdater };
+module.exports = { updateAllDJs, setShouldStopUpdater, setUpdaterQuietMode };

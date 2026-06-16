@@ -1,8 +1,8 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const { scrapeAllDJs, setShouldStopScraper } = require('./scraper');
-const { updateAllDJs, setShouldStopUpdater } = require('./updateDJData');
+const { scrapeAllDJs, setShouldStopScraper, setScraperQuietMode } = require('./scraper');
+const { updateAllDJs, setShouldStopUpdater, setUpdaterQuietMode } = require('./updateDJData');
 const { startEmailScraping, setShouldStopScraping } = require('./scrapeEmails');
 const {
   getDJsWithEmailsCount,
@@ -50,6 +50,7 @@ let schedulerTimer = null;
 let schedulerNextRunAt = null;
 let schedulerLastRunAt = null;
 let schedulerLastStatus = schedulerEnabled ? 'scheduled' : 'disabled';
+let pipelineQuietMode = false;
 
 let pipelineState = {
   runId: null,
@@ -75,6 +76,7 @@ let pipelineState = {
 function addPipelineMessage(stage, message) {
   if (!message) return;
   const text = typeof message === 'string' ? message : JSON.stringify(message);
+  if (pipelineQuietMode && shouldSuppressQuietMessage(text)) return;
   pipelineState.messages.push({
     time: Date.now(),
     stage,
@@ -84,6 +86,41 @@ function addPipelineMessage(stage, message) {
   if (pipelineState.messages.length > PIPELINE_LOG_LIMIT) {
     pipelineState.messages = pipelineState.messages.slice(-PIPELINE_LOG_LIMIT);
   }
+}
+
+function shouldSuppressQuietMessage(message) {
+  return [
+    /^Inserted new DJ:/i,
+    /^Attempt \d+ - Fetching data for DJ:/i,
+    /^Fetching data for DJ:/i,
+    /^Updated DJ:/i,
+    /^Emails saved for /i,
+    /^Found emails for /i
+  ].some(pattern => pattern.test(message));
+}
+
+function shouldSuppressQuietEvent(event, data) {
+  if (!pipelineQuietMode) return false;
+  const suppressibleEvents = new Set([
+    'scraperOutput',
+    'updaterOutput',
+    'emailSearchOutput',
+    'emailsFound',
+    'emailsSaved'
+  ]);
+  if (!suppressibleEvents.has(event)) return false;
+  const text = typeof data === 'string'
+    ? data
+    : data && data.dj && Array.isArray(data.emails)
+      ? `Found emails for ${data.dj}: ${data.emails.join(', ')}`
+      : '';
+  return shouldSuppressQuietMessage(text);
+}
+
+function resetPipelineQuietMode() {
+  pipelineQuietMode = false;
+  setScraperQuietMode(false);
+  setUpdaterQuietMode(false);
 }
 
 function setPipelineState(patch) {
@@ -410,12 +447,14 @@ function recordPipelineEvent(event, data) {
 const pipelineEmitter = {
   emit(event, ...args) {
     recordPipelineEvent(event, args[0]);
+    if (shouldSuppressQuietEvent(event, args[0])) return;
     io.emit(event, ...args);
   }
 };
 
 function emitPipeline(socket, event, data) {
   recordPipelineEvent(event, data);
+  if (shouldSuppressQuietEvent(event, data)) return;
   socket.emit(event, data);
 }
 
@@ -489,16 +528,20 @@ async function startUpdaterRun(socket, options = {}) {
   return completedNormally;
 }
 
-async function startPipelineRun(socket, startLetter) {
+async function startPipelineRun(socket, startLetter, options = {}) {
   if (scraperRunning || updaterRunning || emailScrapingRunning) {
     emitPipeline(socket, 'scraperOutput', 'A full run is already in progress.');
     return;
   }
 
+  pipelineQuietMode = Boolean(options.quiet);
+  setScraperQuietMode(pipelineQuietMode);
+  setUpdaterQuietMode(pipelineQuietMode);
+
   const effectiveStartLetter = String(startLetter || '').trim().toLowerCase() || 'resume';
   const runRecord = await startPersistedPipelineRun(effectiveStartLetter);
   beginPipelineState(effectiveStartLetter, runRecord);
-  emitPipeline(socket, 'scraperOutput', `Starting end-to-end run from letter "${effectiveStartLetter}".`);
+  emitPipeline(socket, 'scraperOutput', `Starting ${pipelineQuietMode ? 'quiet scheduled ' : ''}end-to-end run from letter "${effectiveStartLetter}".`);
   scraperRunning = true;
   scraperStopRequested = false;
   try {
@@ -511,6 +554,7 @@ async function startPipelineRun(socket, startLetter) {
     emitPipeline(socket, 'scraperError', `Scraper exited with error: ${err.message}`);
     setPipelineState({ running: false, endedAt: Date.now() });
     await finishPersistedPipelineRun('failed', `Scraper exited with error: ${err.message}`);
+    resetPipelineQuietMode();
     return;
   } finally {
     scraperRunning = false;
@@ -519,6 +563,7 @@ async function startPipelineRun(socket, startLetter) {
 
   if (scraperStopRequested) {
     emitPipeline(socket, 'scraperStopped', 'Scraper has been stopped.');
+    resetPipelineQuietMode();
     return;
   }
 
@@ -526,6 +571,8 @@ async function startPipelineRun(socket, startLetter) {
     emitPipeline(socket, 'updaterOutput', 'Scraper finished. Starting DJ data updater automatically...');
     await startUpdaterRun(socket);
   }
+
+  resetPipelineQuietMode();
 }
 
 function stopPipelineRun(socket) {
@@ -596,7 +643,7 @@ async function runScheduledPipeline() {
   io.emit('pipelineState', getPipelineSnapshot());
 
   try {
-    await startPipelineRun(schedulerSocket, schedulerStartLetter);
+    await startPipelineRun(schedulerSocket, schedulerStartLetter, { quiet: true });
     schedulerLastStatus = 'completed';
   } catch (error) {
     schedulerLastStatus = 'failed';

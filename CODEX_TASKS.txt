@@ -66,7 +66,7 @@ Current priority tasks
     If the previous run did not finish, the main button and scheduler should resume from the checkpoint automatically.
     Manual starting letter should still be possible when explicitly supplied.
 
-[ ] Add scheduled-run quiet mode.
+[x] Add scheduled-run quiet mode. Completed 2026-06-17.
     Scheduled runs should use calmer defaults:
     - minimized/background browser
     - slower scroll/crawl settings
@@ -123,6 +123,7 @@ Completed tasks
 - 2026-06-17: Hardened DJ detail updater with background Chrome, stop-aware sleeps, optional-field-safe page waits, preserved profile data on empty extraction, browser recycling, and batched searchable-count refreshes.
 - 2026-06-17: Added weekly full-pipeline scheduler with configurable weekday/time/start letter and UI display for scheduler state, next run, and current run state.
 - 2026-06-17: Made resume-from-checkpoint the default start behaviour, with safe fallback to "a" when no checkpoint exists and typed letters still acting as manual overrides.
+- 2026-06-17: Added scheduled-run quiet mode with calmer scraper/updater delays, longer scheduled CAPTCHA cooldowns, and filtered per-DJ chatter during scheduler-triggered runs.
 
 Discovered follow-up tasks
 --------------------------

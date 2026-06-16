@@ -22,9 +22,38 @@ const chromeWindowMode = (process.env.SCRAPER_CHROME_WINDOW_MODE || 'minimized')
 
 const sleep = promisify(setTimeout);
 let shouldStopScraper = false;
+let scraperQuietMode = false;
 
 function setShouldStopScraper(value) {
   shouldStopScraper = value;
+}
+
+function setScraperQuietMode(value) {
+  scraperQuietMode = Boolean(value);
+}
+
+function getCrawlDelay() {
+  return scraperQuietMode
+    ? Number(process.env.SCHEDULED_SCRAPER_CRAWL_DELAY_MS) || Math.max(crawlDelay, 12000)
+    : crawlDelay;
+}
+
+function getScrollDelay() {
+  return scraperQuietMode
+    ? Number(process.env.SCHEDULED_SCRAPER_SCROLL_DELAY_MS) || Math.max(scrollDelay, 3000)
+    : scrollDelay;
+}
+
+function getCaptchaPollDelay() {
+  return scraperQuietMode
+    ? Number(process.env.SCHEDULED_SCRAPER_CAPTCHA_POLL_MS) || Math.max(captchaPollDelay, 10000)
+    : captchaPollDelay;
+}
+
+function getCaptchaCooldownMs() {
+  return scraperQuietMode
+    ? Number(process.env.SCHEDULED_SCRAPER_CAPTCHA_COOLDOWN_MS) || Math.max(captchaCooldownMs, 600000)
+    : captchaCooldownMs;
 }
 
 function jitter(baseMs, spreadMs = 600) {
@@ -106,17 +135,18 @@ async function detectAccessChallenge(driver) {
 }
 
 async function cooldownAfterChallenge(io, channel) {
-  const seconds = Math.round(captchaCooldownMs / 1000);
+  const cooldownMs = getCaptchaCooldownMs();
+  const seconds = Math.round(cooldownMs / 1000);
   io.emit(channel, `Access challenge detected. Cooling down for ${seconds} seconds before continuing.`);
 
   const startedAt = Date.now();
-  while (!shouldStopScraper && Date.now() - startedAt < captchaCooldownMs) {
+  while (!shouldStopScraper && Date.now() - startedAt < cooldownMs) {
     const elapsed = Date.now() - startedAt;
-    const remaining = Math.max(0, Math.ceil((captchaCooldownMs - elapsed) / 1000));
+    const remaining = Math.max(0, Math.ceil((cooldownMs - elapsed) / 1000));
     if (remaining > 0 && remaining % 60 === 0) {
       io.emit(channel, `Cooldown still active. About ${remaining} seconds remaining.`);
     }
-    await politeSleep(Math.min(10000, Math.max(1000, captchaCooldownMs - elapsed)));
+    await politeSleep(Math.min(10000, Math.max(1000, cooldownMs - elapsed)));
   }
 }
 
@@ -183,10 +213,10 @@ async function waitForCaptchaToBeSolved(driver, io) {
     if (!stillChallenged) {
       console.log("Access challenge cleared. Resuming gently...");
       io.emit('scraperOutput', 'Access challenge cleared. Resuming gently...');
-      await politeSleep(crawlDelay);
+      await politeSleep(getCrawlDelay());
       break;
     }
-    await politeSleep(captchaPollDelay);
+    await politeSleep(getCaptchaPollDelay());
   }
 }
 
@@ -279,7 +309,7 @@ async function scrollToBottom(driver, io, onDjBatch = null) {
     }
 
     await driver.executeScript('window.scrollBy(0, Math.floor(window.innerHeight * 0.85));');
-    await politeSleep(scrollDelay);
+    await politeSleep(getScrollDelay());
     if (scraperWasStopped(io)) break;
     await checkForCaptcha(driver, io);
     if (scraperWasStopped(io)) break;
@@ -341,7 +371,7 @@ async function waitForDJElements(driver) {
   const djElements = await driver.findElements(By.css('div.bTitle a'));
   if (djElements.length > 0) {
     await driver.executeScript('arguments[0].scrollIntoView()', djElements[djElements.length - 1]);
-    await politeSleep(scrollDelay);
+    await politeSleep(getScrollDelay());
   }
 }
 
@@ -490,7 +520,7 @@ async function scrapeAllDJs(startLetter, io) {
         nextLetter
       });
 
-      await politeSleep(crawlDelay);
+      await politeSleep(getCrawlDelay());
     }
     if (!shouldStopScraper) {
       io.emit('scraperComplete', 'Scraper completed successfully.');
@@ -501,4 +531,4 @@ async function scrapeAllDJs(startLetter, io) {
   }
 }
 
-module.exports = { scrapeAllDJs, setShouldStopScraper };
+module.exports = { scrapeAllDJs, setShouldStopScraper, setScraperQuietMode };
