@@ -5,6 +5,13 @@ const DB_PATH = path.join(__dirname, 'djs.db');
 const db = new sqlite3.Database(DB_PATH);
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAGIC_EMAILER_SYNC_STATUSES = [
+  'pending',
+  'synced',
+  'failed',
+  'skipped',
+  'skipped_already_exists'
+];
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -53,6 +60,121 @@ function cleanStringArray(value) {
       .map(item => String(item || '').trim())
       .filter(Boolean)
   ));
+}
+
+function createMagicEmailerSyncTableSql(tableName = 'magic_emailer_sync') {
+  const statuses = MAGIC_EMAILER_SYNC_STATUSES.map(status => `'${status}'`).join(', ');
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
+    email TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN (${statuses})),
+    payload TEXT NOT NULL DEFAULT '{}',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    synced_at TEXT,
+    retry_after TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`;
+}
+
+function createMagicEmailerSyncIndexes() {
+  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_status ON magic_emailer_sync(status, updated_at)", (err) => {
+    if (err) {
+      console.error('Error creating magic_emailer_sync status index:', err.message);
+    }
+  });
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_retry_after ON magic_emailer_sync(status, retry_after)", (err) => {
+    if (err) {
+      console.error('Error creating magic_emailer_sync retry_after index:', err.message);
+    }
+  });
+}
+
+function addMagicEmailerRetryAfterColumn() {
+  db.run("ALTER TABLE magic_emailer_sync ADD COLUMN retry_after TEXT", (err) => {
+    if (err && !String(err.message || '').includes('duplicate column name')) {
+      console.error('Error adding magic_emailer_sync retry_after column:', err.message);
+    }
+  });
+}
+
+function migrateMagicEmailerSyncStatuses(hasRetryAfter) {
+  const backupTable = `magic_emailer_sync_backup_${Date.now()}`;
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
+    db.run(`ALTER TABLE magic_emailer_sync RENAME TO ${backupTable}`);
+    db.run(createMagicEmailerSyncTableSql('magic_emailer_sync'));
+    db.run(
+      `INSERT INTO magic_emailer_sync (
+         email,
+         status,
+         payload,
+         attempts,
+         last_error,
+         synced_at,
+         retry_after,
+         created_at,
+         updated_at
+       )
+       SELECT
+         email,
+         CASE
+           WHEN status IN (${MAGIC_EMAILER_SYNC_STATUSES.map(status => `'${status}'`).join(', ')}) THEN status
+           ELSE 'pending'
+         END,
+         payload,
+         attempts,
+         last_error,
+         synced_at,
+         ${hasRetryAfter ? 'retry_after' : 'NULL'},
+         created_at,
+         updated_at
+       FROM ${backupTable}`
+    );
+    db.run(`DROP TABLE ${backupTable}`);
+    db.run("COMMIT", (err) => {
+      if (err) {
+        console.error('Error migrating magic_emailer_sync table:', err.message);
+        db.run("ROLLBACK");
+      } else {
+        createMagicEmailerSyncIndexes();
+      }
+    });
+  });
+}
+
+function ensureMagicEmailerSyncSchema() {
+  db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'magic_emailer_sync'", (err, row) => {
+    if (err) {
+      console.error('Error reading magic_emailer_sync schema:', err.message);
+      return;
+    }
+
+    db.all("PRAGMA table_info(magic_emailer_sync)", (tableErr, rows) => {
+      if (tableErr) {
+        console.error('Error checking magic_emailer_sync columns:', tableErr.message);
+        return;
+      }
+
+      const tableSql = row?.sql || '';
+      const columns = rows.map(column => column.name);
+      const hasRetryAfter = columns.includes('retry_after');
+      const needsStatusMigration = tableSql && !tableSql.includes("'skipped_already_exists'");
+
+      if (needsStatusMigration) {
+        migrateMagicEmailerSyncStatuses(hasRetryAfter);
+        return;
+      }
+
+      if (!hasRetryAfter) {
+        addMagicEmailerRetryAfterColumn();
+      }
+
+      createMagicEmailerSyncIndexes();
+    });
+  });
 }
 
 db.serialize(() => {
@@ -144,27 +266,13 @@ db.serialize(() => {
     }
   });
 
-  db.run(`CREATE TABLE IF NOT EXISTS magic_emailer_sync (
-    email TEXT PRIMARY KEY,
-    status TEXT NOT NULL DEFAULT 'pending'
-      CHECK (status IN ('pending', 'synced', 'failed', 'skipped')),
-    payload TEXT NOT NULL DEFAULT '{}',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT,
-    synced_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )`, (err) => {
+  db.run(createMagicEmailerSyncTableSql(), (err) => {
     if (err) {
       console.error('Error creating magic_emailer_sync table:', err.message);
     }
   });
 
-  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_status ON magic_emailer_sync(status, updated_at)", (err) => {
-    if (err) {
-      console.error('Error creating magic_emailer_sync status index:', err.message);
-    }
-  });
+  ensureMagicEmailerSyncSchema();
 
   db.run(`CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -567,6 +675,8 @@ async function queueMagicEmailerSyncContacts() {
     queued: 0,
     updated: 0,
     skippedSynced: 0,
+    skippedAlreadyExists: 0,
+    retryDelayed: 0,
     invalidEmails: 0
   };
 
@@ -583,12 +693,22 @@ async function queueMagicEmailerSyncContacts() {
     for (const email of cleanEmails) {
       summary.discoveries++;
       const existing = await get(
-        "SELECT email, status, payload FROM magic_emailer_sync WHERE email = ?",
+        "SELECT email, status, payload, retry_after FROM magic_emailer_sync WHERE email = ?",
         [email]
       );
 
       if (existing?.status === 'synced') {
         summary.skippedSynced++;
+        continue;
+      }
+
+      if (existing?.status === 'skipped_already_exists') {
+        summary.skippedAlreadyExists++;
+        continue;
+      }
+
+      if (existing?.retry_after && new Date(existing.retry_after).getTime() > Date.now()) {
+        summary.retryDelayed++;
         continue;
       }
 
@@ -604,6 +724,7 @@ async function queueMagicEmailerSyncContacts() {
           `UPDATE magic_emailer_sync
            SET payload = ?,
                status = CASE WHEN status = 'skipped' THEN status ELSE 'pending' END,
+               retry_after = NULL,
                updated_at = datetime('now')
            WHERE email = ?`,
           [JSON.stringify(payload), email]
@@ -616,10 +737,11 @@ async function queueMagicEmailerSyncContacts() {
              status,
              payload,
              attempts,
+             retry_after,
              created_at,
              updated_at
            )
-           VALUES (?, 'pending', ?, 0, datetime('now'), datetime('now'))`,
+           VALUES (?, 'pending', ?, 0, NULL, datetime('now'), datetime('now'))`,
           [email, JSON.stringify(payload)]
         );
         summary.queued++;
@@ -644,7 +766,7 @@ function getMagicEmailerSyncStats() {
           resolve(rows.reduce((stats, row) => {
             stats[row.status] = row.count;
             return stats;
-          }, { pending: 0, synced: 0, failed: 0, skipped: 0 }));
+          }, { pending: 0, synced: 0, failed: 0, skipped: 0, skipped_already_exists: 0 }));
         }
       }
     );
