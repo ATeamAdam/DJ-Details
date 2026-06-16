@@ -238,6 +238,10 @@ db.serialize(() => {
     profileUpdatedAt TEXT,
     emailsUpdatedAt TEXT,
     magicSyncedAt TEXT,
+    profileErrorAt TEXT,
+    profileErrorMessage TEXT,
+    profileRetryAfter TEXT,
+    profileFailureCount INTEGER NOT NULL DEFAULT 0,
     emails TEXT,
     emailSources TEXT,
     UNIQUE(name, url)
@@ -309,6 +313,34 @@ db.serialize(() => {
         db.run("ALTER TABLE djs ADD COLUMN magicSyncedAt TEXT", (err) => {
           if (err) {
             console.error('Error adding column magicSyncedAt:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('profileErrorAt')) {
+        db.run("ALTER TABLE djs ADD COLUMN profileErrorAt TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column profileErrorAt:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('profileErrorMessage')) {
+        db.run("ALTER TABLE djs ADD COLUMN profileErrorMessage TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column profileErrorMessage:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('profileRetryAfter')) {
+        db.run("ALTER TABLE djs ADD COLUMN profileRetryAfter TEXT", (err) => {
+          if (err) {
+            console.error('Error adding column profileRetryAfter:', err.message);
+          }
+        });
+      }
+      if (!columns.includes('profileFailureCount')) {
+        db.run("ALTER TABLE djs ADD COLUMN profileFailureCount INTEGER NOT NULL DEFAULT 0", (err) => {
+          if (err) {
+            console.error('Error adding column profileFailureCount:', err.message);
           }
         });
       }
@@ -491,6 +523,10 @@ function updateDJ(id, country, socialMediaUrls, musicStyles, emails, emailSource
         emails = COALESCE(?, emails),
         emailSources = COALESCE(?, emailSources),
         profileUpdatedAt = CASE WHEN ? THEN datetime('now') ELSE profileUpdatedAt END,
+        profileErrorAt = CASE WHEN ? THEN NULL ELSE profileErrorAt END,
+        profileErrorMessage = CASE WHEN ? THEN NULL ELSE profileErrorMessage END,
+        profileRetryAfter = CASE WHEN ? THEN NULL ELSE profileRetryAfter END,
+        profileFailureCount = CASE WHEN ? THEN 0 ELSE profileFailureCount END,
         emailsUpdatedAt = CASE WHEN ? THEN datetime('now') ELSE emailsUpdatedAt END,
         lastUpdated = CASE WHEN ? OR ? THEN DATE('now') ELSE lastUpdated END
        WHERE id = ?`,
@@ -500,6 +536,10 @@ function updateDJ(id, country, socialMediaUrls, musicStyles, emails, emailSource
         musicStyles,
         emails,
         emailSources,
+        profileWasUpdated ? 1 : 0,
+        profileWasUpdated ? 1 : 0,
+        profileWasUpdated ? 1 : 0,
+        profileWasUpdated ? 1 : 0,
         profileWasUpdated ? 1 : 0,
         emailsWereUpdated ? 1 : 0,
         profileWasUpdated ? 1 : 0,
@@ -517,6 +557,36 @@ function updateDJ(id, country, socialMediaUrls, musicStyles, emails, emailSource
       }
     );
   });
+}
+
+async function recordDJProfileFailure(id, errorMessage) {
+  const existing = await get(
+    "SELECT profileFailureCount FROM djs WHERE id = ?",
+    [id]
+  );
+  const nextFailureCount = (Number(existing?.profileFailureCount) || 0) + 1;
+  const retryHours = Math.min(168, Math.pow(2, Math.min(nextFailureCount, 6)));
+  const retryAfter = new Date(Date.now() + retryHours * 60 * 60 * 1000).toISOString();
+
+  await run(
+    `UPDATE djs
+     SET profileErrorAt = datetime('now'),
+         profileErrorMessage = ?,
+         profileRetryAfter = ?,
+         profileFailureCount = ?
+     WHERE id = ?`,
+    [
+      String(errorMessage || '').slice(0, 1000),
+      retryAfter,
+      nextFailureCount,
+      id
+    ]
+  );
+
+  return {
+    profileFailureCount: nextFailureCount,
+    profileRetryAfter: retryAfter
+  };
 }
 
 function getAllDJs(filters = {}) {
@@ -546,8 +616,14 @@ function getDJsToUpdate() {
     db.all(
       `SELECT *
        FROM djs
-       WHERE COALESCE(profileUpdatedAt, lastUpdated) IS NULL
-          OR COALESCE(profileUpdatedAt, lastUpdated) < datetime('now', '-28 days')`,
+       WHERE (
+           COALESCE(profileUpdatedAt, lastUpdated) IS NULL
+           OR COALESCE(profileUpdatedAt, lastUpdated) < datetime('now', '-28 days')
+         )
+         AND (
+           profileRetryAfter IS NULL
+           OR profileRetryAfter <= datetime('now')
+         )`,
       [],
       (err, rows) => {
         if (err) {
@@ -862,6 +938,7 @@ module.exports = {
   insertDJ,
   checkDJExists,
   updateDJ,
+  recordDJProfileFailure,
   getAllDJs,
   getDJsToUpdate,
   getDJsForEmailSearch,

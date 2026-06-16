@@ -131,12 +131,14 @@ Completed tasks
 - 2026-06-17: Added run-level UI counters for DJs scanned, new DJs, profiles updated, emails found, Magic queued, and skipped/synced contacts, backed by pipeline run stats where available.
 - 2026-06-17: Connected exact profile-updated and Magic queue summary counters into full-pipeline run stats, persisted history, and live UI counters.
 
+- 2026-06-17: Added DJ profile failure tracking with retry-after backoff, failure metadata columns, stale-profile retry filtering, and automatic clearing after successful updates.
+
 Discovered follow-up tasks
 --------------------------
 [x] Emit exact profile-updated and Magic-sync queued counters into pipeline run history. Completed 2026-06-17.
     The pipeline_runs table has fields for profilesUpdated and emailsQueuedForMagic, but the current pipeline does not yet emit exact per-run values for these counters.
 
-[ ] Add deeper DJ profile failure tracking.
+[x] Add deeper DJ profile failure tracking. Completed 2026-06-17.
     Track repeated profile-update failures so a bad page does not waste time every weekly run:
     - profileErrorAt
     - profileErrorMessage

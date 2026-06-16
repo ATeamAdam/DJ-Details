@@ -1,7 +1,7 @@
 const { Builder, By, until } = require('selenium-webdriver');
 const chrome = require('selenium-webdriver/chrome');
 const { promisify } = require('util');
-const { getDJsToUpdate, updateDJ, getSearchableDJCount } = require('./database');
+const { getDJsToUpdate, updateDJ, recordDJProfileFailure, getSearchableDJCount } = require('./database');
 const notifier = require('node-notifier');
 const path = require('path');
 
@@ -321,6 +321,12 @@ async function processDJ(dj, driver, io) {
   } catch (error) {
     console.error(`Failed to process DJ: ${dj.name} - ${error.message}`);
     io.emit('updaterError', `Failed to process DJ: ${dj.name} - ${error.message}`);
+    try {
+      const failure = await recordDJProfileFailure(dj.id, error.message);
+      io.emit('updaterOutput', `Will retry ${dj.name} after ${failure.profileRetryAfter} (failure ${failure.profileFailureCount}).`);
+    } catch (failureError) {
+      io.emit('updaterError', `Unable to record profile failure for ${dj.name}: ${failureError.message}`);
+    }
     return false;
   } finally {
     try {
