@@ -18,7 +18,8 @@ const chromeProfileDir = process.env.CHROME_PROFILE_DIR ||
   path.join(__dirname, 'chrome-user-data', '1001tracklists');
 const scraperProgressFile = process.env.SCRAPER_PROGRESS_FILE ||
   path.join(__dirname, 'scraper-progress.json');
-const chromeWindowMode = (process.env.SCRAPER_CHROME_WINDOW_MODE || 'minimized').toLowerCase();
+const chromeWindowSize = process.env.SCRAPER_CHROME_WINDOW_SIZE || '1200,900';
+const chromeWindowPosition = process.env.SCRAPER_CHROME_WINDOW_POSITION || '1600,80';
 
 const sleep = promisify(setTimeout);
 let shouldStopScraper = false;
@@ -81,35 +82,15 @@ function createChromeOptions() {
   options.addArguments('ignore-certificate-errors');
   options.addArguments('disable-notifications');
   options.addArguments(`--user-data-dir=${chromeProfileDir}`);
-
-  if (chromeWindowMode === 'visible') {
-    options.addArguments('start-maximized');
-  } else if (chromeWindowMode === 'offscreen') {
-    options.addArguments('--window-size=1200,900');
-    options.addArguments('--window-position=-32000,-32000');
-  } else {
-    options.addArguments('--start-minimized');
-    options.addArguments('--window-size=1200,900');
-  }
+  options.addArguments(`--window-size=${chromeWindowSize}`);
+  options.addArguments(`--window-position=${chromeWindowPosition}`);
 
   return options;
 }
 
-async function keepBrowserInBackground(driver) {
-  if (chromeWindowMode !== 'minimized') return;
-
-  try {
-    await driver.manage().window().minimize();
-  } catch (error) {
-    console.warn(`Unable to minimize Chrome window: ${error.message}`);
-  }
-}
-
 async function createChromeDriver() {
   const options = createChromeOptions();
-  const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
-  await keepBrowserInBackground(driver);
-  return driver;
+  return new Builder().forBrowser('chrome').setChromeOptions(options).build();
 }
 
 async function detectAccessChallenge(driver) {
