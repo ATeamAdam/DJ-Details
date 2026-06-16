@@ -394,9 +394,11 @@ function recordPipelineEvent(event, data) {
       const currentDJ = data && data.currentDJ;
       const processedCount = data && data.processedCount;
       const newDJCount = data && data.newDJCount;
+      const runProcessedCount = data && data.runProcessedCount !== undefined ? data.runProcessedCount : processedCount;
+      const runNewDJCount = data && data.runNewDJCount !== undefined ? data.runNewDJCount : newDJCount;
       updatePipelineRunStats({
-        djsFound: Math.max(pipelineState.runStats?.djsFound || 0, Number(processedCount) || 0),
-        newDjs: Math.max(pipelineState.runStats?.newDjs || 0, Number(newDJCount) || 0)
+        djsFound: Math.max(pipelineState.runStats?.djsFound || 0, Number(runProcessedCount) || 0),
+        newDjs: Math.max(pipelineState.runStats?.newDjs || 0, Number(runNewDJCount) || 0)
       });
       setPipelineState({
         stage: 'scraper',

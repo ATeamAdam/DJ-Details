@@ -181,23 +181,31 @@ function resetScraperSpeed(message = 'Current speed: waiting for scan') {
   setSpeedLabel(message);
 }
 
-function updateScraperSpeed(processedCount) {
-  const count = Number(processedCount) || 0;
+function updateScraperSpeed(processedCount, newDJCount) {
+  const scannedCount = Number(processedCount) || 0;
+  const newCount = Number(newDJCount) || 0;
   const now = Date.now();
 
-  if (!scraperSpeedStartAt || count < scraperSpeedStartCount) {
+  if (!scraperSpeedStartAt || scannedCount < scraperSpeedStartCount) {
     scraperSpeedStartAt = now;
-    scraperSpeedStartCount = count;
+    scraperSpeedStartCount = scannedCount;
     setSpeedLabel('Current speed: warming up');
     return;
   }
 
   const elapsedMinutes = (now - scraperSpeedStartAt) / 60000;
-  const processedSinceStart = Math.max(0, count - scraperSpeedStartCount);
-  const djsPerMinute = elapsedMinutes > 0 ? processedSinceStart / elapsedMinutes : 0;
-  const formatted = djsPerMinute >= 10 ? djsPerMinute.toFixed(0) : djsPerMinute.toFixed(1);
+  if (elapsedMinutes < 1) {
+    setSpeedLabel(`Current speed: measuring (${scannedCount} scanned, ${newCount} new)`);
+    return;
+  }
 
-  setSpeedLabel(`Current speed: ${formatted} DJs/min`);
+  const scannedSinceStart = Math.max(0, scannedCount - scraperSpeedStartCount);
+  const scannedPerMinute = elapsedMinutes > 0 ? scannedSinceStart / elapsedMinutes : 0;
+  const newPerMinute = elapsedMinutes > 0 ? newCount / elapsedMinutes : 0;
+  const formattedNew = newPerMinute >= 10 ? newPerMinute.toFixed(0) : newPerMinute.toFixed(1);
+  const formattedScanned = scannedPerMinute >= 10 ? scannedPerMinute.toFixed(0) : scannedPerMinute.toFixed(1);
+
+  setSpeedLabel(`Current speed: ${formattedNew} new DJs/min (${formattedScanned} scanned/min)`);
 }
 
 function setPipelineButton(running) {
@@ -430,12 +438,14 @@ socket.on('scraperStopped', (data) => {
   stopPipeline('Full run stopped during DJ scanning.');
 });
 
-socket.on('scraperStatus', ({ processedCount, newDJCount, currentDJ, currentURL }) => {
+socket.on('scraperStatus', ({ processedCount, newDJCount, runProcessedCount, runNewDJCount, currentDJ, currentURL }) => {
   if (currentStage !== 'scraper') return;
-  updateScraperSpeed(processedCount);
+  const cumulativeProcessedCount = runProcessedCount !== undefined ? runProcessedCount : processedCount;
+  const cumulativeNewDJCount = runNewDJCount !== undefined ? runNewDJCount : newDJCount;
+  updateScraperSpeed(cumulativeProcessedCount, cumulativeNewDJCount);
   updateRunCounters({
-    djsFound: Math.max(runCounters.djsFound || 0, Number(processedCount) || 0),
-    newDjs: Math.max(runCounters.newDjs || 0, Number(newDJCount) || 0)
+    djsFound: Math.max(runCounters.djsFound || 0, Number(cumulativeProcessedCount) || 0),
+    newDjs: Math.max(runCounters.newDjs || 0, Number(cumulativeNewDJCount) || 0)
   });
   const label = currentDJ
     ? `Scanning: ${currentDJ}`

@@ -265,6 +265,9 @@ async function processDJElementsOnPage(driver, io, state) {
       if (!exists) {
         await insertDJ(djName, djUrl);
         state.newDJCount++;
+        if (state.runTotals) {
+          state.runTotals.newDJCount++;
+        }
         console.log(`Inserted new DJ: ${djName}`);
         io.emit('scraperOutput', `Inserted new DJ: ${djName}`);
       } else {
@@ -275,12 +278,17 @@ async function processDJElementsOnPage(driver, io, state) {
       io.emit('scraperError', `Error processing DJ: ${djName} - ${err.message}`);
     } finally {
       state.processedCount++;
+      if (state.runTotals) {
+        state.runTotals.processedCount++;
+      }
       readline.cursorTo(process.stdout, 0);
       readline.clearLine(process.stdout, 0);
       process.stdout.write(`Processed: ${state.processedCount}, New: ${state.newDJCount}`);
       io.emit('scraperStatus', {
         processedCount: state.processedCount,
         newDJCount: state.newDJCount,
+        runProcessedCount: state.runTotals ? state.runTotals.processedCount : state.processedCount,
+        runNewDJCount: state.runTotals ? state.runTotals.newDJCount : state.newDJCount,
         currentDJ: djName,
         currentURL: djUrl
       });
@@ -375,11 +383,12 @@ async function waitForDJElements(driver) {
   }
 }
 
-async function fetchDJNamesWithSelenium(letter, driver, io) {
+async function fetchDJNamesWithSelenium(letter, driver, io, runTotals = null) {
   const djState = {
     processedCount: 0,
     newDJCount: 0,
-    seenDJs: new Set()
+    seenDJs: new Set(),
+    runTotals
   };
   let totalDJCount = 0;
 
@@ -473,6 +482,11 @@ async function scrapeAllDJs(startLetter, io) {
     }
 
     io.emit('scraperOutput', `Scraper started with letter: ${effectiveStartLetter}`);
+    const runTotals = {
+      processedCount: 0,
+      newDJCount: 0
+    };
+
     for (let i = startIndex; i < alphabet.length; i++) {
       if (shouldStopScraper) {
         console.log('Scraper stopped.');
@@ -494,7 +508,7 @@ async function scrapeAllDJs(startLetter, io) {
 
       try {
         driver = await createChromeDriver();
-        result = await fetchDJNamesWithSelenium(letter, driver, io);
+        result = await fetchDJNamesWithSelenium(letter, driver, io, runTotals);
       } finally {
         if (driver) {
           try {
