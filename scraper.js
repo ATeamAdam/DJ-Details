@@ -150,6 +150,10 @@ async function resolveStartLetter(startLetter) {
     return checkpoint.nextLetter;
   }
 
+  if (requested === '' || requested === 'resume') {
+    return 'a';
+  }
+
   if (process.env.SCRAPER_AUTO_RESUME === '1' && checkpoint?.nextLetter) {
     const requestedIndex = alphabet.indexOf(requested);
     const checkpointIndex = alphabet.indexOf(checkpoint.nextLetter);

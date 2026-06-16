@@ -62,7 +62,7 @@ Current priority tasks
     - current running state
     Scheduled runs should use the same full pipeline flow as the button.
 
-[ ] Make resume-from-checkpoint the default for unfinished runs.
+[x] Make resume-from-checkpoint the default for unfinished runs. Completed 2026-06-17.
     If the previous run did not finish, the main button and scheduler should resume from the checkpoint automatically.
     Manual starting letter should still be possible when explicitly supplied.
 
@@ -122,6 +122,7 @@ Completed tasks
 - 2026-06-17: Added pipeline_runs persistence, best-effort run history writes, persisted last successful run restoration, and UI display of persisted last-success duration.
 - 2026-06-17: Hardened DJ detail updater with background Chrome, stop-aware sleeps, optional-field-safe page waits, preserved profile data on empty extraction, browser recycling, and batched searchable-count refreshes.
 - 2026-06-17: Added weekly full-pipeline scheduler with configurable weekday/time/start letter and UI display for scheduler state, next run, and current run state.
+- 2026-06-17: Made resume-from-checkpoint the default start behaviour, with safe fallback to "a" when no checkpoint exists and typed letters still acting as manual overrides.
 
 Discovered follow-up tasks
 --------------------------

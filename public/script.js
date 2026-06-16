@@ -276,7 +276,7 @@ function handlePipelineToggle() {
   setStage('scraper', 'Starting full run...');
   clearInterval(pipelineTimer);
   pipelineTimer = startTimer(elements.pipelineTimer);
-  socket.emit('startPipeline', elements.startLetter.value || 'a');
+  socket.emit('startPipeline', elements.startLetter.value.trim() || 'resume');
 }
 
 function parseJson(value, fallback) {

@@ -495,14 +495,14 @@ async function startPipelineRun(socket, startLetter) {
     return;
   }
 
-  const effectiveStartLetter = startLetter || 'a';
+  const effectiveStartLetter = String(startLetter || '').trim().toLowerCase() || 'resume';
   const runRecord = await startPersistedPipelineRun(effectiveStartLetter);
   beginPipelineState(effectiveStartLetter, runRecord);
   emitPipeline(socket, 'scraperOutput', `Starting end-to-end run from letter "${effectiveStartLetter}".`);
   scraperRunning = true;
   scraperStopRequested = false;
   try {
-    scraperProcess = scrapeAllDJs(startLetter, pipelineEmitter);
+    scraperProcess = scrapeAllDJs(effectiveStartLetter, pipelineEmitter);
     await scraperProcess;
     if (!scraperStopRequested) {
       emitPipeline(socket, 'scraperComplete', 'Scraper completed successfully.');
@@ -612,7 +612,7 @@ io.on('connection', (socket) => {
   void emitPipelineSnapshot(socket);
 
   socket.on('startPipeline', async (startLetter) => {
-    await startPipelineRun(socket, startLetter || 'a');
+    await startPipelineRun(socket, startLetter || 'resume');
   });
 
   socket.on('stopPipeline', () => {
@@ -624,7 +624,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('startScraper', async (startLetter) => {
-    await startPipelineRun(socket, startLetter || 'a');
+    await startPipelineRun(socket, startLetter || 'resume');
   });
 
   socket.on('stopScraper', () => {
