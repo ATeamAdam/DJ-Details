@@ -129,10 +129,11 @@ Completed tasks
 - 2026-06-17: Made weekly/full-pipeline email runs incremental by querying only DJs with missing or stale email data, while preserving manual filtered email scraping.
 - 2026-06-17: Replaced noisy repeated pipeline messages with summarized health states and repeat counters in both live UI logs and reconnect snapshots.
 - 2026-06-17: Added run-level UI counters for DJs scanned, new DJs, profiles updated, emails found, Magic queued, and skipped/synced contacts, backed by pipeline run stats where available.
+- 2026-06-17: Connected exact profile-updated and Magic queue summary counters into full-pipeline run stats, persisted history, and live UI counters.
 
 Discovered follow-up tasks
 --------------------------
-[ ] Emit exact profile-updated and Magic-sync queued counters into pipeline run history.
+[x] Emit exact profile-updated and Magic-sync queued counters into pipeline run history. Completed 2026-06-17.
     The pipeline_runs table has fields for profilesUpdated and emailsQueuedForMagic, but the current pipeline does not yet emit exact per-run values for these counters.
 
 [ ] Add deeper DJ profile failure tracking.

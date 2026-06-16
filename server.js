@@ -12,7 +12,8 @@ const {
   getSearchableDJCount,
   createPipelineRun,
   updatePipelineRun,
-  getLastSuccessfulPipelineRun
+  getLastSuccessfulPipelineRun,
+  queueMagicEmailerSyncContacts
 } = require('./database');
 
 const app = express();
@@ -468,6 +469,16 @@ function recordPipelineEvent(event, data) {
         addPipelineMessage('emails', `Emails saved for ${data.dj}: ${data.emails.length}`);
       }
       break;
+    case 'magicSyncQueued': {
+      const queued = Number(data?.queued || 0) + Number(data?.updated || 0);
+      const skippedSynced = Number(data?.skippedSynced || 0) + Number(data?.skippedAlreadyExists || 0);
+      updatePipelineRunStats({
+        emailsQueuedForMagic: queued,
+        skippedSynced
+      });
+      addPipelineMessage('emails', `Magic Emailer queue updated: ${queued} pending contacts, ${skippedSynced} skipped/synced.`);
+      break;
+    }
     case 'scrapingProgress':
       setPipelineStageProgress('emails', data, `Searching emails (${getPipelineUnit('emails', data)}/${pipelineTotalUnits})`);
       break;
@@ -512,6 +523,10 @@ async function startEmailScrapingRun(socket) {
     emitPipeline(socket, 'emailSearchOutput', `Email search queue contains ${djs.length} stale or missing DJ records.`);
     emailScrapingProcess = startEmailScraping(djs, pipelineEmitter);
     await emailScrapingProcess;
+    if (!emailScrapingStopRequested) {
+      const magicSummary = await queueMagicEmailerSyncContacts();
+      emitPipeline(socket, 'magicSyncQueued', magicSummary);
+    }
     return true;
   } catch (err) {
     emitPipeline(socket, 'emailScrapingError', `Email scraping exited with error: ${err.message}`);

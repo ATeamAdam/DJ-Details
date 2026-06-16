@@ -509,6 +509,16 @@ socket.on('emailsSaved', ({ dj, emails }) => {
   appendStatus(`Emails saved for ${dj}: ${emails.length}`);
 });
 
+socket.on('magicSyncQueued', (summary) => {
+  const queued = Number(summary?.queued || 0) + Number(summary?.updated || 0);
+  const skippedSynced = Number(summary?.skippedSynced || 0) + Number(summary?.skippedAlreadyExists || 0);
+  updateRunCounters({
+    emailsQueuedForMagic: queued,
+    skippedSynced
+  });
+  appendStatus(`Magic Emailer queue updated: ${queued} pending contacts, ${skippedSynced} skipped/synced.`);
+});
+
 socket.on('scrapingProgress', (percentage) => {
   setStageProgress('emails', percentage, `Searching emails (${getPipelineUnit('emails', percentage)}/${totalPipelineUnits})`);
 });
