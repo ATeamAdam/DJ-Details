@@ -3,15 +3,77 @@ const chrome = require('selenium-webdriver/chrome');
 const { promisify } = require('util');
 const { getDJsToUpdate, updateDJ, getSearchableDJCount } = require('./database');
 const notifier = require('node-notifier');
+const path = require('path');
 
 const sleep = promisify(setTimeout);
 let stopSignal = false;
-const MAX_CONCURRENT_INSTANCES = 8; // Number of browser instances to run concurrently
+const MAX_CONCURRENT_INSTANCES = 1; // Keep this single-browser so Chrome can reuse the same 1001 session safely
 const ELEMENT_TIMEOUT = 60000; // 60 seconds timeout for elements
+const profileDelay = Number(process.env.UPDATER_PROFILE_DELAY_MS) || 7000;
+const profileScrollDelay = Number(process.env.UPDATER_SCROLL_DELAY_MS) || 2200;
+const captchaPollDelay = Number(process.env.UPDATER_CAPTCHA_POLL_MS) || 5000;
+const captchaCooldownMs = Number(process.env.UPDATER_CAPTCHA_COOLDOWN_MS) || 300000;
+const chromeProfileDir = process.env.CHROME_PROFILE_DIR ||
+  path.join(__dirname, 'chrome-user-data', '1001tracklists');
+
+function jitter(baseMs, spreadMs = 700) {
+  const spread = Math.max(0, spreadMs);
+  return Math.max(250, baseMs + Math.floor(Math.random() * (spread * 2 + 1)) - spread);
+}
+
+async function politeSleep(ms) {
+  await sleep(jitter(ms));
+}
+
+function createChromeOptions() {
+  const options = new chrome.Options();
+  options.addArguments('ignore-certificate-errors');
+  options.addArguments('start-maximized');
+  options.addArguments('disable-notifications');
+  options.addArguments(`--user-data-dir=${chromeProfileDir}`);
+  return options;
+}
+
+async function detectAccessChallenge(driver) {
+  try {
+    return await driver.executeScript(`
+      const text = ((document.body && document.body.innerText) || '').toLowerCase();
+      const title = (document.title || '').toLowerCase();
+      const challengeElement = document.querySelector(
+        'img[alt*="Captcha"], iframe[src*="captcha"], iframe[title*="captcha"], input[name*="captcha"], textarea[name*="g-recaptcha-response"]'
+      );
+      return Boolean(
+        challengeElement ||
+        text.includes('captcha') ||
+        title.includes('captcha') ||
+        (text.includes('please wait') && text.includes('forwarded')) ||
+        text.includes('checking your browser') ||
+        text.includes('just a moment')
+      );
+    `);
+  } catch (error) {
+    return false;
+  }
+}
+
+async function cooldownAfterChallenge(io) {
+  const seconds = Math.round(captchaCooldownMs / 1000);
+  io.emit('updaterOutput', `Access challenge detected. Cooling down for ${seconds} seconds before continuing.`);
+
+  const startedAt = Date.now();
+  while (!stopSignal && Date.now() - startedAt < captchaCooldownMs) {
+    const elapsed = Date.now() - startedAt;
+    const remaining = Math.max(0, Math.ceil((captchaCooldownMs - elapsed) / 1000));
+    if (remaining > 0 && remaining % 60 === 0) {
+      io.emit('updaterOutput', `Cooldown still active. About ${remaining} seconds remaining.`);
+    }
+    await sleep(Math.min(10000, Math.max(1000, captchaCooldownMs - elapsed)));
+  }
+}
 
 async function waitForCaptchaToBeSolved(driver, io) {
-  console.log("CAPTCHA detected. Please solve it manually in the browser...");
-  io.emit('updaterOutput', `CAPTCHA detected. Please solve it manually in the browser...`);
+  console.log("Access challenge detected. Please solve it manually in the browser if needed...");
+  io.emit('updaterOutput', `Access challenge detected. Please solve it manually in the browser if needed...`);
 
   notifier.notify({
     title: 'CAPTCHA Detected',
@@ -19,21 +81,22 @@ async function waitForCaptchaToBeSolved(driver, io) {
     sound: true
   });
 
-  while (true) {
-    try {
-      await driver.findElement(By.css('img[alt="Captcha"]'));
-      await sleep(5000);
-    } catch (error) {
-      console.log("CAPTCHA solved. Resuming execution...");
-      io.emit('updaterOutput', `CAPTCHA solved. Resuming execution...`);
+  await cooldownAfterChallenge(io);
+
+  while (!stopSignal) {
+    const stillChallenged = await detectAccessChallenge(driver);
+    if (!stillChallenged) {
+      console.log("Access challenge cleared. Resuming gently...");
+      io.emit('updaterOutput', `Access challenge cleared. Resuming gently...`);
+      await politeSleep(profileDelay);
       break;
     }
+    await sleep(captchaPollDelay);
   }
 }
 
 async function checkForCaptcha(driver, io) {
-  const captchaElement = await driver.findElements(By.css('img[alt="Captcha"]'));
-  if (captchaElement.length > 0) {
+  if (await detectAccessChallenge(driver)) {
     await waitForCaptchaToBeSolved(driver, io);
   }
 }
@@ -46,12 +109,19 @@ async function scrollToBottom(driver, io) {
       io.emit('updaterOutput', `Scrolling to the bottom of the page...`);
       isInitialScroll = false;
     }
-    await driver.executeScript('window.scrollTo(0, document.body.scrollHeight);');
-    await sleep(1000);
+    await driver.executeScript('window.scrollBy(0, Math.floor(window.innerHeight * 0.8));');
+    await politeSleep(profileScrollDelay);
     await checkForCaptcha(driver, io);
 
-    const newHeight = await driver.executeScript('return document.body.scrollHeight');
-    if (newHeight === lastHeight) {
+    const scrollState = await driver.executeScript(`
+      return {
+        height: document.body.scrollHeight,
+        bottom: window.scrollY + window.innerHeight
+      };
+    `);
+    const newHeight = scrollState.height;
+    const nearBottom = scrollState.bottom >= newHeight - 300;
+    if (newHeight === lastHeight && nearBottom) {
       break;
     }
     lastHeight = newHeight;
@@ -112,7 +182,7 @@ async function fetchDJDataWithRetries(dj, driver, io) {
       console.error(`Attempt ${attempt} - Error fetching DJ data for ${dj.name}:`, error.message);
       io.emit('updaterError', `Attempt ${attempt} - Error fetching DJ data for ${dj.name}: ${error.message}`);
       if (attempt === 3) throw error;
-      await sleep(1500);
+      await politeSleep(profileDelay);
     }
   }
 }
@@ -138,15 +208,22 @@ async function processDJ(dj, driver, io) {
 }
 
 async function updateAllDJs(io) {
+  stopSignal = false;
   const djs = await getDJsToUpdate();
   const totalDJs = djs.length;
   let currentDJIndex = 0;
+  let processedDJs = 0;
+
+  if (totalDJs === 0) {
+    io.emit('updateProgress', 100);
+    io.emit('updaterComplete', 'Updater completed successfully. No DJs needed updating.');
+    return;
+  }
 
   const drivers = [];
-  for (let i = 0; i < MAX_CONCURRENT_INSTANCES; i++) {
-    const options = new chrome.Options();
-    options.addArguments('ignore-certificate-errors');
-    options.addArguments('start-maximized');
+  const activeInstances = Math.min(Math.max(1, MAX_CONCURRENT_INSTANCES), totalDJs);
+  for (let i = 0; i < activeInstances; i++) {
+    const options = createChromeOptions();
     const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
     drivers.push(driver);
   }
@@ -163,8 +240,12 @@ async function updateAllDJs(io) {
       await driver.switchTo().window(newTabHandle);
 
       await processDJ(dj, driver, io);
+      processedDJs++;
+      const progress = Math.round((processedDJs / totalDJs) * 100);
+      io.emit('updateProgress', progress);
 
       await driver.switchTo().window(handles[0]); // Switch back to the main window
+      await politeSleep(profileDelay);
     }
   };
 

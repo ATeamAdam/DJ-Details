@@ -6,8 +6,44 @@ let shouldStopScraping = false;
 
 const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
+function parseJsonValue(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function mergeEmailData(existingEmails, existingSources, newEmails, newSources) {
+  const mergedEmails = Array.from(new Set([
+    ...(Array.isArray(existingEmails) ? existingEmails : []),
+    ...(Array.isArray(newEmails) ? newEmails : [])
+  ].map(email => String(email || '').trim().toLowerCase()).filter(Boolean)));
+
+  const mergedSources = {
+    ...(existingSources && typeof existingSources === 'object' && !Array.isArray(existingSources) ? existingSources : {})
+  };
+
+  for (const [email, urls] of Object.entries(newSources || {})) {
+    const normalisedEmail = String(email || '').trim().toLowerCase();
+    if (!normalisedEmail) continue;
+
+    const existingUrls = Array.isArray(mergedSources[normalisedEmail])
+      ? mergedSources[normalisedEmail]
+      : [];
+    mergedSources[normalisedEmail] = Array.from(new Set([
+      ...existingUrls,
+      ...(Array.isArray(urls) ? urls : [])
+    ].map(url => String(url || '').trim()).filter(Boolean)));
+  }
+
+  return { emails: mergedEmails, emailSources: mergedSources };
+}
+
 async function scrapeEmails(urls, io, dj) {
   let emails = [];
+  const emailSources = {};
   const totalUrls = urls.length;
 
   for (let i = 0; i < totalUrls; i++) {
@@ -25,7 +61,19 @@ async function scrapeEmails(urls, io, dj) {
       let foundEmails = response.data.match(emailRegex);
       if (foundEmails) {
         // Filter out emails ending with .png
-        foundEmails = foundEmails.filter(email => !email.endsWith('.png'));
+        foundEmails = foundEmails
+          .filter(email => !email.endsWith('.png'))
+          .map(email => email.toLowerCase());
+
+        for (const email of foundEmails) {
+          if (!emailSources[email]) {
+            emailSources[email] = [];
+          }
+          if (!emailSources[email].includes(url)) {
+            emailSources[email].push(url);
+          }
+        }
+
         emails = emails.concat(foundEmails);
         const foundLogMessage = `Found emails for ${dj.name}: ${foundEmails.join(', ')}`;
         console.log(foundLogMessage);
@@ -45,7 +93,10 @@ async function scrapeEmails(urls, io, dj) {
     io.emit('emailSearchOutput', progressLogMessage);
   }
 
-  return [...new Set(emails)];  // Remove duplicate emails
+  return {
+    emails: [...new Set(emails)],
+    emailSources
+  };
 }
 
 async function processDJsForEmails(djs, io) {
@@ -59,8 +110,11 @@ async function processDJsForEmails(djs, io) {
   for (const dj of djs) {
     if (shouldStopScraping) break;
 
-    const lastUpdatedDate = moment(dj.lastUpdated);
-    const daysSinceUpdate = today.diff(lastUpdatedDate, 'days');
+    const rawEmailUpdatedAt = dj.emailsUpdatedAt || dj.lastUpdated;
+    const lastUpdatedDate = rawEmailUpdatedAt ? moment(rawEmailUpdatedAt) : null;
+    const daysSinceUpdate = lastUpdatedDate && lastUpdatedDate.isValid()
+      ? today.diff(lastUpdatedDate, 'days')
+      : Infinity;
 
     if (daysSinceUpdate < 90 && dj.emails) {
       const skipMessage = `Skipping ${dj.name}: updated less than 90 days ago`;
@@ -75,12 +129,28 @@ async function processDJsForEmails(djs, io) {
       console.log(processLogMessage);
       io.emit('emailScrapingStarted', processLogMessage);
 
-      const emails = await scrapeEmails(urls, io, dj);
-      await updateDJ(dj.id, dj.country, dj.socialMediaUrls, dj.musicStyles, JSON.stringify(emails));
+      const { emails, emailSources } = await scrapeEmails(urls, io, dj);
+      const existingEmails = parseJsonValue(dj.emails, []);
+      const existingEmailSources = parseJsonValue(dj.emailSources, {});
+      const mergedEmailData = mergeEmailData(
+        existingEmails,
+        existingEmailSources,
+        emails,
+        emailSources
+      );
 
-      const saveLogMessage = `Emails saved for ${dj.name}: ${emails.join(', ')}`;
+      await updateDJ(
+        dj.id,
+        null,
+        null,
+        null,
+        JSON.stringify(mergedEmailData.emails),
+        JSON.stringify(mergedEmailData.emailSources)
+      );
+
+      const saveLogMessage = `Emails saved for ${dj.name}: ${mergedEmailData.emails.join(', ')}`;
       console.log(saveLogMessage);
-      io.emit('emailsSaved', { dj: dj.name, emails });
+      io.emit('emailsSaved', { dj: dj.name, emails: mergedEmailData.emails });
       //io.emit('emailScrapingStarted', saveLogMessage);
     }
 
@@ -103,9 +173,8 @@ function setShouldStopScraping(value) {
 
 function startEmailScraping(djs, io) {
   shouldStopScraping = false;  // Reset the stop signal
-  processDJsForEmails(djs, io).then(() => {
-    io.emit('emailScrapingStarted', 'Email scraping started.');  // Emit when the process starts
-  });
+  io.emit('emailScrapingStarted', 'Email scraping started.');
+  return processDJsForEmails(djs, io);
 }
 
 module.exports = {

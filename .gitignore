@@ -16,6 +16,9 @@ pnpm-debug.log*
 .npm/
 .yarn/
 .pnpm-store/
+playwright-report/
+.playwright/
+test-results/
 
 # Python
 .venv/
@@ -49,6 +52,10 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+scraper-progress.json
+pipeline-progress.json
+chrome-user-data/
+playwright/.cache/
 
 # Misc generated files
 *.tmp

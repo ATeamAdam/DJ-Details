@@ -21,9 +21,9 @@ body {
   background-size: cover;
 }
 
-#scraperOutput, #updaterOutput, #emailSearchOutput {
+#pipelineOutput {
   width: calc(100% - var(--padding));
-  height: 100px;
+  height: 220px;
   background-color: var(--container-bg-color);
   padding: 10px;
   border: 1px solid var(--border-color);

@@ -4,6 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "stage:scrape-djs": "node scripts/dj-stage.js scrape-djs",
+    "stage:update-profiles": "node scripts/dj-stage.js update-profiles",
+    "stage:scrape-emails": "node scripts/dj-stage.js scrape-emails",
+    "stage:queue-magic-sync": "node scripts/dj-stage.js queue-magic-sync",
+    "stage:all": "node scripts/dj-stage.js all",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

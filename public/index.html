@@ -27,32 +27,18 @@
       <p>DJs with Social Media URLs: <span id="searchableDJs">0</span></p>
       <p>DJs with Emails: <span id="djsWithEmailsCount">0</span></p>
     </section>
-    <section aria-labelledby="scraperSectionHeading">
-      <h2 id="scraperSectionHeading">Scraper</h2>
+    <section aria-labelledby="pipelineSectionHeading">
+      <h2 id="pipelineSectionHeading">Full Run</h2>
       <label for="startLetter">Start from letter:</label>
       <input type="text" id="startLetter" maxlength="1" value="a">
-      <button id="toggleScraper">Start Scraper</button>
-      <span id="scraperTimer">00:00:00</span>
-      <textarea id="scraperOutput" readonly aria-live="polite"></textarea>
-    </section>
-    <section aria-labelledby="updaterSectionHeading">
-      <h2 id="updaterSectionHeading">Update DJ Data</h2>
-      <button id="toggleUpdater">Start Updater</button>
-      <span id="updaterTimer">00:00:00</span>
+      <button id="togglePipeline">Start Full Run</button>
+                <span id="pipelineTimer">00:00:00</span>
+                <span id="lastRunDuration">Last full run: not yet completed</span>
+                <span id="pipelineSpeed">Current speed: not scanning</span>
       <div class="progress">
-        <div class="progress-bar" id="updateProgress" style="width: 0%;">0%</div>
+        <div class="progress-bar" id="pipelineProgress" style="width: 0%;">Idle</div>
       </div>
-      <textarea id="updaterOutput" readonly aria-live="polite"></textarea>
-    </section>
-    <section aria-labelledby="scrapeEmails">
-      <h2 id="filterSectionHeading">Search for DJ Emails</h2>
-      <div id="scrapeEmailContainer">
-        <button id="scrapeEmails">Start Email Scraping</button>
-      </div>
-      <div class="progress">
-        <div class="progress-bar" id="emailSearchProgress" style="width: 0%;">0%</div>
-      </div>
-      <textarea id="emailSearchOutput" readonly aria-live="polite"></textarea>
+      <textarea id="pipelineOutput" readonly aria-live="polite"></textarea>
     </section>
     <section aria-labelledby="filterSectionHeading">
       <h2 id="filterSectionHeading">Browse and Filter DJs</h2>
