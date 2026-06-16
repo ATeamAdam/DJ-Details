@@ -27,29 +27,43 @@
       <p>DJs with Social Media URLs: <span id="searchableDJs">0</span></p>
       <p>DJs with Emails: <span id="djsWithEmailsCount">0</span></p>
     </section>
-    <section aria-labelledby="pipelineSectionHeading">
-      <h2 id="pipelineSectionHeading">Full Run</h2>
-      <label for="startLetter">Start from letter:</label>
-      <input type="text" id="startLetter" maxlength="6" value="" placeholder="resume">
-      <button id="togglePipeline">Start Full Run</button>
-                <span id="pipelineTimer">00:00:00</span>
-                <span id="lastRunDuration">Last full run: not yet completed</span>
-                <span id="pipelineRunState">Current state: idle</span>
-                <span id="schedulerStatus">Scheduler: unknown</span>
-                <span id="schedulerNextRun">Next scheduled run: not scheduled</span>
-                <span id="pipelineSpeed">Current speed: not scanning</span>
-      <div class="progress">
+    <section class="pipeline-card" aria-labelledby="pipelineSectionHeading">
+      <div class="pipeline-heading-row">
+        <div>
+          <p class="eyebrow">Automation</p>
+          <h2 id="pipelineSectionHeading">Full Run</h2>
+        </div>
+        <span id="pipelineTimer" class="timer-pill">00:00:00</span>
+      </div>
+
+      <div class="pipeline-control-bar">
+        <label for="startLetter">Start from</label>
+        <input type="text" id="startLetter" maxlength="6" value="" placeholder="resume">
+        <button id="togglePipeline">Start Full Run</button>
+      </div>
+
+      <div class="pipeline-meta-grid">
+        <span id="lastRunDuration">Last full run: not yet completed</span>
+        <span id="pipelineRunState">Current state: idle</span>
+        <span id="schedulerStatus">Scheduler: unknown</span>
+        <span id="schedulerNextRun">Next scheduled run: not scheduled</span>
+        <span id="pipelineSpeed">Current speed: not scanning</span>
+      </div>
+
+      <div class="progress pipeline-progress">
         <div class="progress-bar" id="pipelineProgress" style="width: 0%;">Idle</div>
       </div>
-      <div id="pipelineCounters" aria-label="Run summary counters">
-        <span>DJs scanned: <strong id="runDjsScanned">0</strong></span>
-        <span>New DJs: <strong id="runNewDjs">0</strong></span>
-        <span>Profiles updated: <strong id="runProfilesUpdated">0</strong></span>
-        <span>Emails found: <strong id="runEmailsFound">0</strong></span>
-        <span>Magic queued: <strong id="runMagicQueued">0</strong></span>
-        <span>Skipped/synced: <strong id="runSkippedSynced">0</strong></span>
+
+      <div id="pipelineCounters" class="pipeline-counters" aria-label="Run summary counters">
+        <span><small>DJs scanned</small><strong id="runDjsScanned">0</strong></span>
+        <span><small>New DJs</small><strong id="runNewDjs">0</strong></span>
+        <span><small>Profiles updated</small><strong id="runProfilesUpdated">0</strong></span>
+        <span><small>Emails found</small><strong id="runEmailsFound">0</strong></span>
+        <span><small>Magic queued</small><strong id="runMagicQueued">0</strong></span>
+        <span><small>Skipped/synced</small><strong id="runSkippedSynced">0</strong></span>
       </div>
-      <textarea id="pipelineOutput" readonly aria-live="polite"></textarea>
+
+      <textarea id="pipelineOutput" class="pipeline-console" readonly aria-live="polite"></textarea>
     </section>
     <section aria-labelledby="filterSectionHeading">
       <h2 id="filterSectionHeading">Browse and Filter DJs</h2>
