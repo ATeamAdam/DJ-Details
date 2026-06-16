@@ -419,6 +419,11 @@ function recordPipelineEvent(event, data) {
       void finishPersistedPipelineRun('stopped', data || 'Scraper stopped.');
       break;
     case 'updaterOutput':
+      if (/^Updated DJ:/i.test(String(data || ''))) {
+        updatePipelineRunStats({
+          profilesUpdated: (pipelineState.runStats?.profilesUpdated || 0) + 1
+        });
+      }
       setPipelineStageProgress('updater', 0, `Updating DJ data (${getPipelineUnit('updater', 0)}/${pipelineTotalUnits})`);
       addPipelineMessage('updater', data);
       break;

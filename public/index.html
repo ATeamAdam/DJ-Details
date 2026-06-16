@@ -41,6 +41,14 @@
       <div class="progress">
         <div class="progress-bar" id="pipelineProgress" style="width: 0%;">Idle</div>
       </div>
+      <div id="pipelineCounters" aria-label="Run summary counters">
+        <span>DJs scanned: <strong id="runDjsScanned">0</strong></span>
+        <span>New DJs: <strong id="runNewDjs">0</strong></span>
+        <span>Profiles updated: <strong id="runProfilesUpdated">0</strong></span>
+        <span>Emails found: <strong id="runEmailsFound">0</strong></span>
+        <span>Magic queued: <strong id="runMagicQueued">0</strong></span>
+        <span>Skipped/synced: <strong id="runSkippedSynced">0</strong></span>
+      </div>
       <textarea id="pipelineOutput" readonly aria-live="polite"></textarea>
     </section>
     <section aria-labelledby="filterSectionHeading">

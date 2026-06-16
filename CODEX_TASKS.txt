@@ -108,7 +108,7 @@ Current priority tasks
     - 1001Tracklists unavailable: retrying later
     - Chrome restarted after letter to clear memory
 
-[ ] Add run-level summary counters to the UI.
+[x] Add run-level summary counters to the UI. Completed 2026-06-17.
     The single status panel should expose concise run totals:
     - DJs scanned
     - new DJs inserted
@@ -128,6 +128,7 @@ Completed tasks
 - 2026-06-17: Added Magic Emailer contact normalization with stronger email cleaning, trimmed DJ names, canonicalized URLs, email-level dedupe through the sync ledger, and role-email flags in payloads.
 - 2026-06-17: Made weekly/full-pipeline email runs incremental by querying only DJs with missing or stale email data, while preserving manual filtered email scraping.
 - 2026-06-17: Replaced noisy repeated pipeline messages with summarized health states and repeat counters in both live UI logs and reconnect snapshots.
+- 2026-06-17: Added run-level UI counters for DJs scanned, new DJs, profiles updated, emails found, Magic queued, and skipped/synced contacts, backed by pipeline run stats where available.
 
 Discovered follow-up tasks
 --------------------------

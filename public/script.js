@@ -7,6 +7,14 @@ let scraperSpeedStartAt = null;
 let scraperSpeedStartCount = 0;
 let lastStatusMessage = '';
 let lastStatusRepeat = 1;
+let runCounters = {
+  djsFound: 0,
+  newDjs: 0,
+  profilesUpdated: 0,
+  emailsFound: 0,
+  emailsQueuedForMagic: 0,
+  skippedSynced: 0
+};
 
 const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
 const stageOrder = {
@@ -36,7 +44,13 @@ const elements = {
   djResults: document.getElementById('djResults'),
   totalDJs: document.getElementById('totalDJs'),
   searchableDJs: document.getElementById('searchableDJs'),
-  djsWithEmailsCount: document.getElementById('djsWithEmailsCount')
+  djsWithEmailsCount: document.getElementById('djsWithEmailsCount'),
+  runDjsScanned: document.getElementById('runDjsScanned'),
+  runNewDjs: document.getElementById('runNewDjs'),
+  runProfilesUpdated: document.getElementById('runProfilesUpdated'),
+  runEmailsFound: document.getElementById('runEmailsFound'),
+  runMagicQueued: document.getElementById('runMagicQueued'),
+  runSkippedSynced: document.getElementById('runSkippedSynced')
 };
 
 function formatDuration(totalSeconds) {
@@ -130,6 +144,35 @@ function trimStatusWindow() {
 function setSpeedLabel(message) {
   if (!elements.pipelineSpeed) return;
   elements.pipelineSpeed.textContent = message;
+}
+
+function renderRunCounters() {
+  if (elements.runDjsScanned) elements.runDjsScanned.textContent = runCounters.djsFound || 0;
+  if (elements.runNewDjs) elements.runNewDjs.textContent = runCounters.newDjs || 0;
+  if (elements.runProfilesUpdated) elements.runProfilesUpdated.textContent = runCounters.profilesUpdated || 0;
+  if (elements.runEmailsFound) elements.runEmailsFound.textContent = runCounters.emailsFound || 0;
+  if (elements.runMagicQueued) elements.runMagicQueued.textContent = runCounters.emailsQueuedForMagic || 0;
+  if (elements.runSkippedSynced) elements.runSkippedSynced.textContent = runCounters.skippedSynced || 0;
+}
+
+function resetRunCounters() {
+  runCounters = {
+    djsFound: 0,
+    newDjs: 0,
+    profilesUpdated: 0,
+    emailsFound: 0,
+    emailsQueuedForMagic: 0,
+    skippedSynced: 0
+  };
+  renderRunCounters();
+}
+
+function updateRunCounters(patch) {
+  runCounters = {
+    ...runCounters,
+    ...patch
+  };
+  renderRunCounters();
 }
 
 function resetScraperSpeed(message = 'Current speed: waiting for scan') {
@@ -281,6 +324,10 @@ function hydratePipelineState(state) {
   setPipelineButton(Boolean(state.running));
   setRunStateLabel(state.running ? `${currentStage} running` : currentStage);
   updateSchedulerDisplay(state.scheduler);
+  updateRunCounters({
+    ...runCounters,
+    ...(state.runStats || {})
+  });
 
   clearInterval(pipelineTimer);
   pipelineTimer = null;
@@ -319,6 +366,7 @@ function handlePipelineToggle() {
   elements.pipelineOutput.value = '';
   lastStatusMessage = '';
   lastStatusRepeat = 1;
+  resetRunCounters();
   setPipelineButton(true);
   resetScraperSpeed();
   setStage('scraper', 'Starting full run...');
@@ -385,6 +433,10 @@ socket.on('scraperStopped', (data) => {
 socket.on('scraperStatus', ({ processedCount, newDJCount, currentDJ, currentURL }) => {
   if (currentStage !== 'scraper') return;
   updateScraperSpeed(processedCount);
+  updateRunCounters({
+    djsFound: Math.max(runCounters.djsFound || 0, Number(processedCount) || 0),
+    newDjs: Math.max(runCounters.newDjs || 0, Number(newDJCount) || 0)
+  });
   const label = currentDJ
     ? `Scanning: ${currentDJ}`
     : `Scanning ${processedCount || 0} processed / ${newDJCount || 0} new`;
@@ -395,6 +447,11 @@ socket.on('scraperStatus', ({ processedCount, newDJCount, currentDJ, currentURL 
 socket.on('updaterOutput', (data) => {
   if (currentStage !== 'updater') {
     setStage('updater');
+  }
+  if (/^Updated DJ:/i.test(String(data || ''))) {
+    updateRunCounters({
+      profilesUpdated: (runCounters.profilesUpdated || 0) + 1
+    });
   }
   appendStatus(data);
 });
@@ -442,6 +499,9 @@ socket.on('emailScrapingError', (data) => {
 });
 
 socket.on('emailsFound', ({ dj, url, emails }) => {
+  updateRunCounters({
+    emailsFound: (runCounters.emailsFound || 0) + (Array.isArray(emails) ? emails.length : 0)
+  });
   appendStatus(`Found emails for ${dj}: ${emails.join(', ')} (${url})`);
 });
 
