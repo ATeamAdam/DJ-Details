@@ -1,0 +1,188 @@
+:root {
+  --primary-font: sans-serif;
+  --background-color: #1e1e1e;
+  --container-bg-color: rgba(0, 0, 0, 0.5);
+  --text-color: #fff;
+  --border-color: #333;
+  --button-bg-color: #4caf50;
+  --button-text-color: #fff;
+  --button-hover-bg-color: #45a049;
+  --progress-bg-color: #444;
+  --progress-bar-color: #4caf50;
+  --padding: 20px;
+  --margin-top: 10px;
+}
+
+body {
+  font-family: var(--primary-font);
+  padding: var(--padding);
+  color: var(--text-color);
+  background: url('/assets/djSearchBackground.webp') no-repeat center center fixed;
+  background-size: cover;
+}
+
+#scraperOutput, #updaterOutput, #emailSearchOutput {
+  width: calc(100% - var(--padding));
+  height: 100px;
+  background-color: var(--container-bg-color);
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  margin-top: var(--margin-top);
+  resize: none;
+  color: var(--text-color);
+  border-radius: 8px;
+}
+
+#djResults {
+  margin-top: calc(var(--margin-top) * 2);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: var(--container-bg-color);
+  border-radius: 8px;
+}
+
+th, td {
+  border: 1px solid var(--border-color);
+  padding: 10px;
+  color: var(--text-color);
+}
+
+th {
+  background-color: var(--container-bg-color);
+}
+
+button, #djTable_wrapper button {
+  background-color: var(--button-bg-color);
+  color: var(--button-text-color);
+  border: none;
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin-top: var(--margin-top);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover, #djTable_wrapper button:hover {
+  background-color: var(--button-hover-bg-color);
+}
+
+input[type="text"] {
+  padding: 10px;
+  margin-right: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--container-bg-color);
+  color: var(--text-color);
+}
+
+.progress {
+  width: 100%;
+  background-color: var(--progress-bg-color);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: var(--margin-top);
+}
+
+.progress-bar {
+  height: 20px;
+  background-color: var(--progress-bar-color);
+  text-align: center;
+  color: white;
+  line-height: 20px;
+}
+
+h1, h2 {
+  margin-bottom: var(--margin-top);
+  color: var(--text-color);
+}
+
+header {
+  background-color: var(--container-bg-color);
+  padding: 20px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+section {
+  background-color: var(--container-bg-color);
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: var(--margin-top);
+}
+
+table.dataTable tbody td {
+  background-color: #000;
+}
+
+.dataTables_length, #djTable_filter, #djTable_wrapper, .dataTables_info, .dataTables_paginate, .paging_simple_numbers, .paginate_button, .previous, .next {
+  color: #fff !important;
+}
+
+#djTable a:link {
+  color: #fff;
+}
+
+#djTable a:visited {
+  color: #45a049;
+}
+
+#djStats {
+  margin-top: 10px;
+}
+
+#loadingScreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: black;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  overflow: hidden;
+}
+
+#loadingGif {
+  width: 300px;
+  height: 300px;
+}
+
+#loadingText, #waitText {
+  color: white;
+  font-size: 20px;
+  text-align: center;
+}
+
+#waitText {
+  color: white;
+  font-size: 1.5em;
+  opacity: 0;
+}
+
+.dataTables_length {
+  float: right !important;
+  font-size: 20pt;
+}
+
+.dataTables_length select {
+  font-size: 20pt;
+}
+
+#headerIcon {
+  width: 108px;
+  float: left;
+  position: relative;
+  top: -20px;
+  left: -20px;
+  border-radius: 7px;
+}
