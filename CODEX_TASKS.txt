@@ -85,7 +85,7 @@ Current priority tasks
     - attempts
     The sync process should be idempotent and safe to rerun.
 
-[ ] Add contact dedupe and normalization before Magic Emailer sync.
+[x] Add contact dedupe and normalization before Magic Emailer sync. Completed 2026-06-17.
     Normalize and validate contact data before queueing or syncing:
     - lower-case email addresses
     - trim DJ names
@@ -125,6 +125,7 @@ Completed tasks
 - 2026-06-17: Made resume-from-checkpoint the default start behaviour, with safe fallback to "a" when no checkpoint exists and typed letters still acting as manual overrides.
 - 2026-06-17: Added scheduled-run quiet mode with calmer scraper/updater delays, longer scheduled CAPTCHA cooldowns, and filtered per-DJ chatter during scheduler-triggered runs.
 - 2026-06-17: Strengthened Magic Emailer sync ledger with expanded statuses, retry_after support, schema migration for existing DBs, retry-aware queueing, and updated sync stats.
+- 2026-06-17: Added Magic Emailer contact normalization with stronger email cleaning, trimmed DJ names, canonicalized URLs, email-level dedupe through the sync ledger, and role-email flags in payloads.
 
 Discovered follow-up tasks
 --------------------------

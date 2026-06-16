@@ -50,8 +50,31 @@ function parseJsonValue(value, fallback) {
 }
 
 function cleanEmail(value) {
-  const email = String(value || '').trim().toLowerCase();
+  const email = String(value || '')
+    .trim()
+    .replace(/^mailto:/i, '')
+    .split('?')[0]
+    .toLowerCase();
   return emailPattern.test(email) ? email : '';
+}
+
+function normalizeContactName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizeUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  try {
+    const url = new URL(text);
+    url.hash = '';
+    url.hostname = url.hostname.toLowerCase();
+    const normalized = url.toString();
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+  } catch (error) {
+    return text.replace(/\/+$/, '');
+  }
 }
 
 function cleanStringArray(value) {
@@ -60,6 +83,32 @@ function cleanStringArray(value) {
       .map(item => String(item || '').trim())
       .filter(Boolean)
   ));
+}
+
+function cleanUrlArray(value) {
+  return Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+      .map(normalizeUrl)
+      .filter(Boolean)
+  ));
+}
+
+function isRoleEmail(email) {
+  const localPart = String(email || '').split('@')[0];
+  return [
+    'admin',
+    'booking',
+    'bookings',
+    'contact',
+    'hello',
+    'info',
+    'mail',
+    'management',
+    'manager',
+    'office',
+    'press',
+    'team'
+  ].includes(localPart);
 }
 
 function createMagicEmailerSyncTableSql(tableName = 'magic_emailer_sync') {
@@ -639,6 +688,10 @@ function mergeDiscoveryPayload(existingPayload, email, discovery) {
   return {
     email,
     source: 'dj_discovery',
+    flags: {
+      ...(payload.flags && typeof payload.flags === 'object' ? payload.flags : {}),
+      roleEmail: isRoleEmail(email)
+    },
     discoveries: nextDiscoveries
   };
 }
@@ -651,12 +704,12 @@ function buildMagicSyncDiscovery(dj, email) {
 
   return {
     djId: dj.id,
-    djName: dj.name || '',
-    djUrl: dj.url || '',
-    foundOnUrls: cleanStringArray(emailSources[email] || []),
+    djName: normalizeContactName(dj.name),
+    djUrl: normalizeUrl(dj.url),
+    foundOnUrls: cleanUrlArray(emailSources[email] || []),
     country: cleanStringArray(country),
     musicStyles: cleanStringArray(musicStyles),
-    socialMediaUrls: cleanStringArray(socialMediaUrls)
+    socialMediaUrls: cleanUrlArray(socialMediaUrls)
   };
 }
 
@@ -677,6 +730,7 @@ async function queueMagicEmailerSyncContacts() {
     skippedSynced: 0,
     skippedAlreadyExists: 0,
     retryDelayed: 0,
+    roleEmails: 0,
     invalidEmails: 0
   };
 
@@ -692,6 +746,9 @@ async function queueMagicEmailerSyncContacts() {
 
     for (const email of cleanEmails) {
       summary.discoveries++;
+      if (isRoleEmail(email)) {
+        summary.roleEmails++;
+      }
       const existing = await get(
         "SELECT email, status, payload, retry_after FROM magic_emailer_sync WHERE email = ?",
         [email]
