@@ -39,6 +39,20 @@ Current priority tasks
     - errorSummary
     The UI should be able to show the last successful run from persisted data, not only server memory.
 
+[x] Harden DJ detail updater for stability and efficiency. Completed 2026-06-17.
+    Improve updateDJData.js without increasing CAPTCHA risk:
+    - open updater Chrome minimized/backgrounded like the scraper
+    - do not treat missing optional fields such as flags/social links as page-load failure
+    - avoid overwriting existing useful profile data with empty extracted arrays
+    - restart Chrome every 25-50 DJs to clear browser memory
+    - batch searchable DJ count refreshes instead of querying after every DJ
+    - make updater sleeps respond promptly to Stop
+    Add deeper profile failure tracking later if needed:
+    - profileErrorAt
+    - profileErrorMessage
+    - profileRetryAfter
+    - profileFailureCount
+
 [ ] Add weekly scheduler and next-run display.
     Add a configurable weekly background run, for example Sunday at 02:00.
     The UI should show:
@@ -121,8 +135,16 @@ Current priority tasks
 Completed tasks
 ---------------
 - 2026-06-17: Added pipeline_runs persistence, best-effort run history writes, persisted last successful run restoration, and UI display of persisted last-success duration.
+- 2026-06-17: Hardened DJ detail updater with background Chrome, stop-aware sleeps, optional-field-safe page waits, preserved profile data on empty extraction, browser recycling, and batched searchable-count refreshes.
 
 Discovered follow-up tasks
 --------------------------
 [ ] Emit exact profile-updated and Magic-sync queued counters into pipeline run history.
     The pipeline_runs table has fields for profilesUpdated and emailsQueuedForMagic, but the current pipeline does not yet emit exact per-run values for these counters.
+
+[ ] Add deeper DJ profile failure tracking.
+    Track repeated profile-update failures so a bad page does not waste time every weekly run:
+    - profileErrorAt
+    - profileErrorMessage
+    - profileRetryAfter
+    - profileFailureCount

@@ -7,14 +7,16 @@ const path = require('path');
 
 const sleep = promisify(setTimeout);
 let stopSignal = false;
-const MAX_CONCURRENT_INSTANCES = 1; // Keep this single-browser so Chrome can reuse the same 1001 session safely
 const ELEMENT_TIMEOUT = 60000; // 60 seconds timeout for elements
 const profileDelay = Number(process.env.UPDATER_PROFILE_DELAY_MS) || 7000;
 const profileScrollDelay = Number(process.env.UPDATER_SCROLL_DELAY_MS) || 2200;
 const captchaPollDelay = Number(process.env.UPDATER_CAPTCHA_POLL_MS) || 5000;
 const captchaCooldownMs = Number(process.env.UPDATER_CAPTCHA_COOLDOWN_MS) || 300000;
+const browserRestartEvery = Math.max(1, Number(process.env.UPDATER_BROWSER_RESTART_EVERY) || 40);
+const searchableCountRefreshEvery = Math.max(1, Number(process.env.UPDATER_COUNT_REFRESH_EVERY) || 25);
 const chromeProfileDir = process.env.CHROME_PROFILE_DIR ||
   path.join(__dirname, 'chrome-user-data', '1001tracklists');
+const chromeWindowMode = (process.env.UPDATER_CHROME_WINDOW_MODE || process.env.SCRAPER_CHROME_WINDOW_MODE || 'minimized').toLowerCase();
 
 function jitter(baseMs, spreadMs = 700) {
   const spread = Math.max(0, spreadMs);
@@ -22,16 +24,92 @@ function jitter(baseMs, spreadMs = 700) {
 }
 
 async function politeSleep(ms) {
-  await sleep(jitter(ms));
+  const endAt = Date.now() + jitter(ms);
+  while (!stopSignal && Date.now() < endAt) {
+    await sleep(Math.min(250, endAt - Date.now()));
+  }
 }
 
 function createChromeOptions() {
   const options = new chrome.Options();
   options.addArguments('ignore-certificate-errors');
-  options.addArguments('start-maximized');
   options.addArguments('disable-notifications');
   options.addArguments(`--user-data-dir=${chromeProfileDir}`);
+
+  if (chromeWindowMode === 'visible') {
+    options.addArguments('start-maximized');
+  } else if (chromeWindowMode === 'offscreen') {
+    options.addArguments('--window-size=1200,900');
+    options.addArguments('--window-position=-32000,-32000');
+  } else {
+    options.addArguments('--start-minimized');
+    options.addArguments('--window-size=1200,900');
+  }
+
   return options;
+}
+
+async function keepBrowserInBackground(driver) {
+  if (chromeWindowMode !== 'minimized') return;
+
+  try {
+    await driver.manage().window().minimize();
+  } catch (error) {
+    console.warn(`Unable to minimize updater Chrome window: ${error.message}`);
+  }
+}
+
+async function createChromeDriver() {
+  const options = createChromeOptions();
+  const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
+  await keepBrowserInBackground(driver);
+  return driver;
+}
+
+async function quitChromeDriver(driver, io, reason) {
+  if (!driver) return;
+
+  try {
+    await driver.quit();
+    if (reason) {
+      io.emit('updaterOutput', reason);
+    }
+  } catch (error) {
+    console.warn(`Unable to close updater Chrome window: ${error.message}`);
+    io.emit('updaterOutput', `Unable to close updater Chrome window: ${error.message}`);
+  }
+}
+
+function parseJsonArray(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function cleanStringArray(values) {
+  return Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+  ));
+}
+
+function buildProfileFieldValue(existingValue, extractedValues) {
+  const cleanExtracted = cleanStringArray(extractedValues);
+  if (cleanExtracted.length > 0) {
+    return JSON.stringify(cleanExtracted);
+  }
+
+  const existingValues = cleanStringArray(parseJsonArray(existingValue));
+  if (existingValues.length > 0) {
+    return JSON.stringify(existingValues);
+  }
+
+  return JSON.stringify([]);
 }
 
 async function detectAccessChallenge(driver) {
@@ -67,7 +145,7 @@ async function cooldownAfterChallenge(io) {
     if (remaining > 0 && remaining % 60 === 0) {
       io.emit('updaterOutput', `Cooldown still active. About ${remaining} seconds remaining.`);
     }
-    await sleep(Math.min(10000, Math.max(1000, captchaCooldownMs - elapsed)));
+    await politeSleep(Math.min(10000, Math.max(1000, captchaCooldownMs - elapsed)));
   }
 }
 
@@ -91,11 +169,12 @@ async function waitForCaptchaToBeSolved(driver, io) {
       await politeSleep(profileDelay);
       break;
     }
-    await sleep(captchaPollDelay);
+    await politeSleep(captchaPollDelay);
   }
 }
 
 async function checkForCaptcha(driver, io) {
+  if (stopSignal) return;
   if (await detectAccessChallenge(driver)) {
     await waitForCaptchaToBeSolved(driver, io);
   }
@@ -105,13 +184,16 @@ async function scrollToBottom(driver, io) {
   let lastHeight = await driver.executeScript('return document.body.scrollHeight');
   let isInitialScroll = true;
   while (true) {
+    if (stopSignal) break;
     if (isInitialScroll) {
       io.emit('updaterOutput', `Scrolling to the bottom of the page...`);
       isInitialScroll = false;
     }
     await driver.executeScript('window.scrollBy(0, Math.floor(window.innerHeight * 0.8));');
     await politeSleep(profileScrollDelay);
+    if (stopSignal) break;
     await checkForCaptcha(driver, io);
+    if (stopSignal) break;
 
     const scrollState = await driver.executeScript(`
       return {
@@ -136,9 +218,12 @@ async function getDJData(driver, url, io) {
   try {
     await driver.get(url);
     await checkForCaptcha(driver, io);
-    await driver.wait(until.elementsLocated(By.css('img.flag, div.cRow a')), ELEMENT_TIMEOUT);
+    if (stopSignal) return { country, socialMediaUrls, musicStyles };
+    await driver.wait(until.elementLocated(By.css('body')), ELEMENT_TIMEOUT);
+    await politeSleep(1000);
 
     await scrollToBottom(driver, io);
+    if (stopSignal) return { country, socialMediaUrls, musicStyles };
 
     const flagElements = await driver.findElements(By.css('img.flag'));
     for (let element of flagElements) {
@@ -189,21 +274,30 @@ async function fetchDJDataWithRetries(dj, driver, io) {
 
 async function processDJ(dj, driver, io) {
   try {
+    if (stopSignal) return false;
     const { country, socialMediaUrls, musicStyles } = await fetchDJDataWithRetries(dj, driver, io);
-    await updateDJ(dj.id, JSON.stringify(country), JSON.stringify(socialMediaUrls), JSON.stringify(musicStyles));
+    if (stopSignal) return false;
+
+    await updateDJ(
+      dj.id,
+      buildProfileFieldValue(dj.country, country),
+      buildProfileFieldValue(dj.socialMediaUrls, socialMediaUrls),
+      buildProfileFieldValue(dj.musicStyles, musicStyles)
+    );
     console.log(`Updated DJ: ${dj.name}`);
     io.emit('updaterOutput', `Updated DJ: ${dj.name}`);
-
-    // Emit the updated searchable DJ count
-    const searchableDJCount = await getSearchableDJCount();
-    io.emit('updateSearchableDJCount', searchableDJCount);
+    return true;
 
   } catch (error) {
     console.error(`Failed to process DJ: ${dj.name} - ${error.message}`);
     io.emit('updaterError', `Failed to process DJ: ${dj.name} - ${error.message}`);
+    return false;
   } finally {
-    // Close the tab
-    await driver.close();
+    try {
+      await driver.close();
+    } catch (error) {
+      console.warn(`Unable to close updater tab for ${dj.name}: ${error.message}`);
+    }
   }
 }
 
@@ -220,40 +314,63 @@ async function updateAllDJs(io) {
     return;
   }
 
-  const drivers = [];
-  const activeInstances = Math.min(Math.max(1, MAX_CONCURRENT_INSTANCES), totalDJs);
-  for (let i = 0; i < activeInstances; i++) {
-    const options = createChromeOptions();
-    const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
-    drivers.push(driver);
-  }
+  let driver = null;
+  let processedWithCurrentDriver = 0;
 
-  const processNextDJ = async (driver) => {
+  const ensureDriver = async () => {
+    if (driver && processedWithCurrentDriver < browserRestartEvery) {
+      return driver;
+    }
+
+    if (driver) {
+      await quitChromeDriver(driver, io, `Restarted updater Chrome after ${processedWithCurrentDriver} DJs to clear browser memory.`);
+    }
+
+    driver = await createChromeDriver();
+    processedWithCurrentDriver = 0;
+    return driver;
+  };
+
+  try {
     while (currentDJIndex < totalDJs && !stopSignal) {
       const dj = djs[currentDJIndex++];
+      const activeDriver = await ensureDriver();
       console.log(`Fetching data for DJ: ${dj.name}`);
       io.emit('updaterOutput', `Fetching data for DJ: ${dj.name}`);
 
-      await driver.executeScript('window.open("about:blank", "_blank");');
-      const handles = await driver.getAllWindowHandles();
+      await activeDriver.executeScript('window.open("about:blank", "_blank");');
+      const handles = await activeDriver.getAllWindowHandles();
+      const mainHandle = handles[0];
       const newTabHandle = handles[handles.length - 1];
-      await driver.switchTo().window(newTabHandle);
+      await activeDriver.switchTo().window(newTabHandle);
 
-      await processDJ(dj, driver, io);
+      await processDJ(dj, activeDriver, io);
       processedDJs++;
+      processedWithCurrentDriver++;
       const progress = Math.round((processedDJs / totalDJs) * 100);
       io.emit('updateProgress', progress);
 
-      await driver.switchTo().window(handles[0]); // Switch back to the main window
+      const remainingHandles = await activeDriver.getAllWindowHandles();
+      if (remainingHandles.includes(mainHandle)) {
+        await activeDriver.switchTo().window(mainHandle);
+      } else if (remainingHandles.length > 0) {
+        await activeDriver.switchTo().window(remainingHandles[0]);
+      }
+
+      if (processedDJs % searchableCountRefreshEvery === 0 || processedDJs === totalDJs) {
+        const searchableDJCount = await getSearchableDJCount();
+        io.emit('updateSearchableDJCount', searchableDJCount);
+      }
+
       await politeSleep(profileDelay);
     }
-  };
+  } finally {
+    await quitChromeDriver(driver, io);
+  }
 
-  const promises = drivers.map(driver => processNextDJ(driver));
-  await Promise.all(promises);
-
-  for (const driver of drivers) {
-    await driver.quit();
+  if (stopSignal) {
+    io.emit('updaterStopped', 'Updater has been stopped.');
+    return;
   }
 
   io.emit('updaterComplete', 'Updater completed successfully.');
