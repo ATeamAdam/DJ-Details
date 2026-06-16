@@ -53,15 +53,6 @@ Current priority tasks
     - pipeline_runs table
     Migrations should fail clearly and avoid leaving renamed/half-migrated tables behind.
 
-[ ] Move runtime data out of OneDrive by default.
-    Runtime files should be configurable and default to a safer local data directory outside the repo/OneDrive.
-    Add clear environment variables and migration notes for:
-    - DJ_DETAILS_DATA_DIR
-    - DJ_DETAILS_DB_PATH
-    - CHROME_PROFILE_DIR
-    - SCRAPER_PROGRESS_FILE
-    Preserve backwards compatibility by reading the existing repo djs.db if no new path is configured.
-
 [ ] Make Magic Emailer queueing incremental.
     queueMagicEmailerSyncContacts currently scans all DJs with emails and then skips synced contacts.
     Change it to process only contacts likely to need queue work:
