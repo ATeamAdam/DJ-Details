@@ -101,7 +101,7 @@ Current priority tasks
     - search emails only for stale/missing email data
     - sync only contacts not already synced
 
-[ ] Replace noisy failure streams with health summaries.
+[x] Replace noisy failure streams with health summaries. Completed 2026-06-17.
     The UI should still keep useful logs, but repeated noisy messages should be summarized into clearer health states:
     - CAPTCHA encountered: cooling down
     - page stalled: saved current DJs and moving on
@@ -127,6 +127,7 @@ Completed tasks
 - 2026-06-17: Strengthened Magic Emailer sync ledger with expanded statuses, retry_after support, schema migration for existing DBs, retry-aware queueing, and updated sync stats.
 - 2026-06-17: Added Magic Emailer contact normalization with stronger email cleaning, trimmed DJ names, canonicalized URLs, email-level dedupe through the sync ledger, and role-email flags in payloads.
 - 2026-06-17: Made weekly/full-pipeline email runs incremental by querying only DJs with missing or stale email data, while preserving manual filtered email scraping.
+- 2026-06-17: Replaced noisy repeated pipeline messages with summarized health states and repeat counters in both live UI logs and reconnect snapshots.
 
 Discovered follow-up tasks
 --------------------------

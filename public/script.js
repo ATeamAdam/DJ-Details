@@ -5,6 +5,8 @@ let pipelineTimer = null;
 let currentStage = 'idle';
 let scraperSpeedStartAt = null;
 let scraperSpeedStartCount = 0;
+let lastStatusMessage = '';
+let lastStatusRepeat = 1;
 
 const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
 const stageOrder = {
@@ -72,9 +74,47 @@ function startTimer(timerElement, initialSeconds = 0) {
 function appendStatus(message) {
   if (!message) return;
   const timestamp = new Date().toLocaleTimeString();
-  elements.pipelineOutput.value += `[${timestamp}] ${message}\n`;
+  const summarizedMessage = summarizeStatusMessage(message);
+
+  if (summarizedMessage === lastStatusMessage) {
+    lastStatusRepeat++;
+    const lines = elements.pipelineOutput.value.trimEnd().split('\n');
+    lines[lines.length - 1] = `[${timestamp}] ${summarizedMessage} (x${lastStatusRepeat})`;
+    elements.pipelineOutput.value = `${lines.join('\n')}\n`;
+  } else {
+    lastStatusMessage = summarizedMessage;
+    lastStatusRepeat = 1;
+    elements.pipelineOutput.value += `[${timestamp}] ${summarizedMessage}\n`;
+  }
+
   trimStatusWindow();
   elements.pipelineOutput.scrollTop = elements.pipelineOutput.scrollHeight;
+}
+
+function summarizeStatusMessage(message) {
+  const text = String(message || '');
+
+  if (/access challenge detected|captcha/i.test(text)) {
+    return 'CAPTCHA encountered: cooling down or waiting for clearance.';
+  }
+
+  if (/no new content loaded|retrying after a short pause/i.test(text)) {
+    return 'Page stalled: still waiting for more content.';
+  }
+
+  if (/stuck for too long|moving on/i.test(text)) {
+    return 'Page stalled: saved current discoveries and moving on.';
+  }
+
+  if (/closed chrome after|restarted updater chrome/i.test(text)) {
+    return 'Chrome restarted to clear browser memory.';
+  }
+
+  if (/failed to load dj list/i.test(text)) {
+    return '1001Tracklists unavailable for this letter: moving on.';
+  }
+
+  return text;
 }
 
 function trimStatusWindow() {
@@ -215,7 +255,10 @@ function formatStatusEntry(entry) {
     ? new Date(entry.time).toLocaleTimeString()
     : new Date().toLocaleTimeString();
   const message = entry && entry.message ? entry.message : '';
-  return `[${timestamp}] ${message}`;
+  const repeatCount = entry && entry.repeatCount && entry.repeatCount > 1
+    ? ` (x${entry.repeatCount})`
+    : '';
+  return `[${timestamp}] ${message}${repeatCount}`;
 }
 
 function hydratePipelineState(state) {
@@ -228,6 +271,9 @@ function hydratePipelineState(state) {
     if (elements.pipelineOutput.value) {
       elements.pipelineOutput.value += '\n';
     }
+    const lastEntry = state.messages[state.messages.length - 1];
+    lastStatusMessage = lastEntry && lastEntry.message ? lastEntry.message : '';
+    lastStatusRepeat = lastEntry && lastEntry.repeatCount ? lastEntry.repeatCount : 1;
     elements.pipelineOutput.scrollTop = elements.pipelineOutput.scrollHeight;
   }
 
@@ -271,6 +317,8 @@ function handlePipelineToggle() {
   }
 
   elements.pipelineOutput.value = '';
+  lastStatusMessage = '';
+  lastStatusRepeat = 1;
   setPipelineButton(true);
   resetScraperSpeed();
   setStage('scraper', 'Starting full run...');

@@ -76,8 +76,17 @@ let pipelineState = {
 
 function addPipelineMessage(stage, message) {
   if (!message) return;
-  const text = typeof message === 'string' ? message : JSON.stringify(message);
-  if (pipelineQuietMode && shouldSuppressQuietMessage(text)) return;
+  const rawText = typeof message === 'string' ? message : JSON.stringify(message);
+  if (pipelineQuietMode && shouldSuppressQuietMessage(rawText)) return;
+  const text = summarizePipelineMessage(rawText);
+  const lastMessage = pipelineState.messages[pipelineState.messages.length - 1];
+
+  if (lastMessage && lastMessage.message === text) {
+    lastMessage.time = Date.now();
+    lastMessage.repeatCount = (lastMessage.repeatCount || 1) + 1;
+    return;
+  }
+
   pipelineState.messages.push({
     time: Date.now(),
     stage,
@@ -87,6 +96,32 @@ function addPipelineMessage(stage, message) {
   if (pipelineState.messages.length > PIPELINE_LOG_LIMIT) {
     pipelineState.messages = pipelineState.messages.slice(-PIPELINE_LOG_LIMIT);
   }
+}
+
+function summarizePipelineMessage(message) {
+  const text = String(message || '');
+
+  if (/access challenge detected|captcha/i.test(text)) {
+    return 'CAPTCHA encountered: cooling down or waiting for clearance.';
+  }
+
+  if (/no new content loaded|retrying after a short pause/i.test(text)) {
+    return 'Page stalled: still waiting for more content.';
+  }
+
+  if (/stuck for too long|moving on/i.test(text)) {
+    return 'Page stalled: saved current discoveries and moving on.';
+  }
+
+  if (/closed chrome after|restarted updater chrome/i.test(text)) {
+    return 'Chrome restarted to clear browser memory.';
+  }
+
+  if (/failed to load dj list/i.test(text)) {
+    return '1001Tracklists unavailable for this letter: moving on.';
+  }
+
+  return text;
 }
 
 function shouldSuppressQuietMessage(message) {
