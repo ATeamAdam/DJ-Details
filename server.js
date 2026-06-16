@@ -32,6 +32,11 @@ let emailScrapingStopRequested = false;
 
 const PIPELINE_LOG_LIMIT = 300;
 const pipelineAlphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
+const schedulerDayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const schedulerEnabled = String(process.env.PIPELINE_SCHEDULER_ENABLED || '1').toLowerCase() !== '0';
+const schedulerDay = String(process.env.PIPELINE_SCHEDULER_DAY || 'tuesday').toLowerCase();
+const schedulerTime = String(process.env.PIPELINE_SCHEDULER_TIME || '02:00');
+const schedulerStartLetter = String(process.env.PIPELINE_SCHEDULER_START_LETTER || 'resume').toLowerCase();
 const pipelineStageOrder = {
   idle: 0,
   scraper: 0,
@@ -41,6 +46,10 @@ const pipelineStageOrder = {
 };
 const pipelineUnitsPerStage = pipelineAlphabet.length;
 const pipelineTotalUnits = pipelineUnitsPerStage * 3;
+let schedulerTimer = null;
+let schedulerNextRunAt = null;
+let schedulerLastRunAt = null;
+let schedulerLastStatus = schedulerEnabled ? 'scheduled' : 'disabled';
 
 let pipelineState = {
   runId: null,
@@ -231,7 +240,49 @@ function getPipelineSnapshot() {
     ...pipelineState,
     running: pipelineState.running || scraperRunning || updaterRunning || emailScrapingRunning,
     stopRequested: scraperStopRequested || updaterStopRequested || emailScrapingStopRequested,
+    scheduler: getSchedulerSnapshot(),
     messages: [...pipelineState.messages]
+  };
+}
+
+function parseSchedulerTime(value) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return { hour: 2, minute: 0 };
+
+  const hour = Math.max(0, Math.min(23, Number(match[1])));
+  const minute = Math.max(0, Math.min(59, Number(match[2])));
+  return { hour, minute };
+}
+
+function getSchedulerDayIndex() {
+  const index = schedulerDayNames.indexOf(schedulerDay);
+  return index >= 0 ? index : 2;
+}
+
+function getNextScheduledRunDate(fromDate = new Date()) {
+  const { hour, minute } = parseSchedulerTime(schedulerTime);
+  const targetDay = getSchedulerDayIndex();
+  const next = new Date(fromDate);
+  next.setHours(hour, minute, 0, 0);
+
+  let daysUntilTarget = targetDay - next.getDay();
+  if (daysUntilTarget < 0 || (daysUntilTarget === 0 && next <= fromDate)) {
+    daysUntilTarget += 7;
+  }
+
+  next.setDate(next.getDate() + daysUntilTarget);
+  return next;
+}
+
+function getSchedulerSnapshot() {
+  return {
+    enabled: schedulerEnabled,
+    day: schedulerDayNames[getSchedulerDayIndex()],
+    time: schedulerTime,
+    startLetter: schedulerStartLetter,
+    nextRunAt: schedulerNextRunAt ? schedulerNextRunAt.toISOString() : null,
+    lastRunAt: schedulerLastRunAt ? schedulerLastRunAt.toISOString() : null,
+    lastStatus: schedulerLastStatus
   };
 }
 
@@ -502,6 +553,60 @@ function stopPipelineRun(socket) {
   emitPipeline(socket, 'scraperOutput', 'No full run is currently running.');
 }
 
+function scheduleNextPipelineRun() {
+  if (schedulerTimer) {
+    clearTimeout(schedulerTimer);
+    schedulerTimer = null;
+  }
+
+  if (!schedulerEnabled) {
+    schedulerNextRunAt = null;
+    schedulerLastStatus = 'disabled';
+    return;
+  }
+
+  schedulerNextRunAt = getNextScheduledRunDate();
+  schedulerLastStatus = schedulerLastStatus || 'scheduled';
+  const delayMs = Math.max(1000, schedulerNextRunAt.getTime() - Date.now());
+
+  schedulerTimer = setTimeout(() => {
+    void runScheduledPipeline();
+  }, delayMs);
+}
+
+async function runScheduledPipeline() {
+  schedulerLastRunAt = new Date();
+
+  const schedulerSocket = {
+    emit(event, data) {
+      io.emit(event, data);
+    }
+  };
+
+  if (scraperRunning || updaterRunning || emailScrapingRunning) {
+    schedulerLastStatus = 'skipped_running';
+    emitPipeline(schedulerSocket, 'scraperOutput', 'Scheduled full run skipped because a pipeline is already running.');
+    scheduleNextPipelineRun();
+    io.emit('pipelineState', getPipelineSnapshot());
+    return;
+  }
+
+  schedulerLastStatus = 'running';
+  emitPipeline(schedulerSocket, 'scraperOutput', `Scheduled full run starting from "${schedulerStartLetter}".`);
+  io.emit('pipelineState', getPipelineSnapshot());
+
+  try {
+    await startPipelineRun(schedulerSocket, schedulerStartLetter);
+    schedulerLastStatus = 'completed';
+  } catch (error) {
+    schedulerLastStatus = 'failed';
+    emitPipeline(schedulerSocket, 'scraperError', `Scheduled full run failed: ${error.message}`);
+  } finally {
+    scheduleNextPipelineRun();
+    io.emit('pipelineState', getPipelineSnapshot());
+  }
+}
+
 io.on('connection', (socket) => {
   console.log('New client connected');
   void emitPipelineSnapshot(socket);
@@ -604,4 +709,10 @@ io.on('connection', (socket) => {
 
 server.listen(3000, () => {
   console.log('Server running at http://localhost:3000');
+  scheduleNextPipelineRun();
+  if (schedulerEnabled && schedulerNextRunAt) {
+    console.log(`Pipeline scheduler enabled. Next run: ${schedulerNextRunAt.toLocaleString()}`);
+  } else {
+    console.log('Pipeline scheduler disabled.');
+  }
 });

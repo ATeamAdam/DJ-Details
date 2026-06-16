@@ -22,6 +22,9 @@ const elements = {
   togglePipeline: document.getElementById('togglePipeline'),
   pipelineTimer: document.getElementById('pipelineTimer'),
   lastRunDuration: document.getElementById('lastRunDuration'),
+  pipelineRunState: document.getElementById('pipelineRunState'),
+  schedulerStatus: document.getElementById('schedulerStatus'),
+  schedulerNextRun: document.getElementById('schedulerNextRun'),
   pipelineSpeed: document.getElementById('pipelineSpeed'),
   pipelineProgress: document.getElementById('pipelineProgress'),
   pipelineOutput: document.getElementById('pipelineOutput'),
@@ -46,6 +49,11 @@ function formatDateTime(value) {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+function titleCase(value) {
+  const text = String(value || '');
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : '';
 }
 
 function setTimerSeconds(seconds) {
@@ -114,6 +122,32 @@ function setPipelineButton(running) {
   elements.togglePipeline.textContent = running ? 'Stop Full Run' : 'Start Full Run';
 }
 
+function setRunStateLabel(label) {
+  if (!elements.pipelineRunState) return;
+  elements.pipelineRunState.textContent = `Current state: ${label}`;
+}
+
+function updateSchedulerDisplay(scheduler) {
+  if (!scheduler) return;
+
+  if (elements.schedulerStatus) {
+    const scheduleLabel = scheduler.enabled
+      ? `enabled (${titleCase(scheduler.day)} ${scheduler.time})`
+      : 'disabled';
+    const lastStatus = scheduler.lastStatus ? `, last status: ${scheduler.lastStatus}` : '';
+    elements.schedulerStatus.textContent = `Scheduler: ${scheduleLabel}${lastStatus}`;
+  }
+
+  if (elements.schedulerNextRun) {
+    const nextRun = scheduler.enabled && scheduler.nextRunAt
+      ? formatDateTime(scheduler.nextRunAt)
+      : '';
+    elements.schedulerNextRun.textContent = nextRun
+      ? `Next scheduled run: ${nextRun}`
+      : 'Next scheduled run: not scheduled';
+  }
+}
+
 function setProgress(percent, label) {
   const bounded = Math.max(0, Math.min(100, Number(percent) || 0));
   elements.pipelineProgress.style.width = `${bounded}%`;
@@ -132,6 +166,7 @@ function getPipelineUnit(stage, percent) {
 function setStage(stage, message) {
   currentStage = stage;
   if (message) appendStatus(message);
+  setRunStateLabel(stage);
   const stageIndex = stageOrder[stage] || 0;
   const overall = stage === 'complete'
     ? 100
@@ -198,6 +233,8 @@ function hydratePipelineState(state) {
 
   setProgress(state.progress || 0, state.label || (state.running ? 'Running' : 'Idle'));
   setPipelineButton(Boolean(state.running));
+  setRunStateLabel(state.running ? `${currentStage} running` : currentStage);
+  updateSchedulerDisplay(state.scheduler);
 
   clearInterval(pipelineTimer);
   pipelineTimer = null;
