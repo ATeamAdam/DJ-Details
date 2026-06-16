@@ -35,7 +35,7 @@ Current priority tasks
     - UI receives the final complete state
     Make sure a failed Magic queue step records a failed/partial run instead of silently succeeding.
 
-[ ] Make pipeline completion events single-owner.
+[x] Make pipeline completion events single-owner. Completed 2026-06-17.
     Several stages emit their own completion events and the server also emits completion events after awaiting them.
     Choose one owner, preferably the server/orchestrator, for final stage completion messages.
     Remove or suppress duplicate completion emissions for:
@@ -177,6 +177,7 @@ Completed tasks
 - 2026-06-17: Added run-level UI counters for DJs scanned, new DJs, profiles updated, emails found, Magic queued, and skipped/synced contacts, backed by pipeline run stats where available.
 - 2026-06-17: Connected exact profile-updated and Magic queue summary counters into full-pipeline run stats, persisted history, and live UI counters.
 - 2026-06-17: Fixed pipeline completion ordering so email scraping completion no longer finalizes the run before Magic queue counters are emitted and persisted.
+- 2026-06-17: Moved scraper, updater, email-stage, and full-pipeline completion ownership into the server orchestrator to prevent duplicate completion events.
 
 - 2026-06-17: Added DJ profile failure tracking with retry-after backoff, failure metadata columns, stale-profile retry filtering, and automatic clearing after successful updates.
 

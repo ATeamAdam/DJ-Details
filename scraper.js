@@ -517,9 +517,6 @@ async function scrapeAllDJs(startLetter, io) {
 
       await politeSleep(getCrawlDelay());
     }
-    if (!shouldStopScraper) {
-      io.emit('scraperComplete', 'Scraper completed successfully.');
-    }
   } catch (error) {
     console.error('An error occurred:', error);
     io.emit('scraperError', `An error occurred: ${error.message}`);

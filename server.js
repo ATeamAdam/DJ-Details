@@ -530,6 +530,7 @@ async function startEmailScrapingRun(socket) {
     emailScrapingProcess = startEmailScraping(djs, pipelineEmitter);
     await emailScrapingProcess;
     if (!emailScrapingStopRequested) {
+      emitPipeline(socket, 'scrapingComplete', 'Email scraping complete.');
       const magicSummary = await queueMagicEmailerSyncContacts();
       emitPipeline(socket, 'magicSyncQueued', magicSummary);
       emitPipeline(socket, 'pipelineComplete', 'Full pipeline completed successfully.');

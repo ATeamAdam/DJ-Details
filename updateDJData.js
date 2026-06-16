@@ -327,7 +327,6 @@ async function updateAllDJs(io) {
 
   if (totalDJs === 0) {
     io.emit('updateProgress', 100);
-    io.emit('updaterComplete', 'Updater completed successfully. No DJs needed updating.');
     return;
   }
 
@@ -389,8 +388,6 @@ async function updateAllDJs(io) {
     io.emit('updaterStopped', 'Updater has been stopped.');
     return;
   }
-
-  io.emit('updaterComplete', 'Updater completed successfully.');
 }
 
 function setShouldStopUpdater(value) {

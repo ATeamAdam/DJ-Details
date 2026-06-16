@@ -164,7 +164,6 @@ async function processDJsForEmails(djs, io) {
 
   const completeMessage = 'Email scraping complete';
   console.log(completeMessage);
-  io.emit('scrapingComplete', completeMessage);
 }
 
 function setShouldStopScraping(value) {
