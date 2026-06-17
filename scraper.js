@@ -2,6 +2,7 @@ const { Builder, By, until } = require('selenium-webdriver');
 const chrome = require('selenium-webdriver/chrome');
 const readline = require('readline');
 const { promisify } = require('util');
+const { execFile } = require('child_process');
 const { insertDJ, checkDJExists, getDJCount } = require('./database');
 const notifier = require('node-notifier');
 const path = require('path');
@@ -22,6 +23,7 @@ const chromeWindowSize = process.env.SCRAPER_CHROME_WINDOW_SIZE || '1200,900';
 const chromeWindowPosition = process.env.SCRAPER_CHROME_WINDOW_POSITION || '1600,80';
 
 const sleep = promisify(setTimeout);
+const execFileAsync = promisify(execFile);
 let shouldStopScraper = false;
 let scraperQuietMode = false;
 
@@ -91,6 +93,56 @@ function createChromeOptions() {
 async function createChromeDriver() {
   const options = createChromeOptions();
   return new Builder().forBrowser('chrome').setChromeOptions(options).build();
+}
+
+async function cleanupStaleScraperChrome(io) {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  const command = `
+$targetProfile = [System.IO.Path]::GetFullPath($args[0])
+$matches = Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" | Where-Object {
+  $_.CommandLine -and $_.CommandLine.Contains($targetProfile)
+}
+$closed = 0
+foreach ($process in $matches) {
+  try {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    $closed++
+  } catch {
+  }
+}
+Write-Output $closed
+`;
+
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        command,
+        chromeProfileDir
+      ],
+      {
+        timeout: 10000,
+        windowsHide: true
+      }
+    );
+    const closed = Number(String(stdout || '').trim().split(/\s+/).pop() || 0);
+    if (closed > 0 && io && typeof io.emit === 'function') {
+      io.emit('scraperOutput', `Closed ${closed} stale scraper Chrome process${closed === 1 ? '' : 'es'} before starting the next browser.`);
+    }
+  } catch (error) {
+    console.warn(`Unable to clean up stale scraper Chrome processes: ${error.message}`);
+    if (io && typeof io.emit === 'function') {
+      io.emit('scraperOutput', `Unable to clean up stale scraper Chrome processes: ${error.message}`);
+    }
+  }
 }
 
 async function detectAccessChallenge(driver) {
@@ -488,6 +540,7 @@ async function scrapeAllDJs(startLetter, io) {
       let result = null;
 
       try {
+        await cleanupStaleScraperChrome(io);
         driver = await createChromeDriver();
         result = await fetchDJNamesWithSelenium(letter, driver, io, runTotals);
       } finally {
