@@ -61,7 +61,7 @@ Current priority tasks
     - pending/failed ledger rows whose retry_after has passed
     Keep the operation idempotent and safe to rerun.
 
-[ ] Add orchestration and database smoke tests.
+[x] Add orchestration and database smoke tests. Completed 2026-06-17.
     Add tests that do not require hitting 1001Tracklists:
     - pipeline finalizes only after Magic queue summary is recorded
     - duplicate completion events do not double-count run history

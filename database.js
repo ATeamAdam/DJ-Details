@@ -1,7 +1,9 @@
 const path = require('path');
+const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 
-const DB_PATH = path.join(__dirname, 'djs.db');
+const DB_PATH = path.resolve(process.env.DJ_DETAILS_DB_PATH || path.join(__dirname, 'djs.db'));
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new sqlite3.Database(DB_PATH);
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -204,6 +206,66 @@ async function ensureMagicEmailerSyncSchema() {
   await createMagicEmailerSyncIndexes();
 }
 
+async function ensureDjsSchema() {
+  await run(`CREATE TABLE IF NOT EXISTS djs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    url TEXT,
+    country TEXT,
+    socialMediaUrls TEXT,
+    musicStyles TEXT,
+    lastUpdated DATE,
+    profileUpdatedAt TEXT,
+    emailsUpdatedAt TEXT,
+    magicSyncedAt TEXT,
+    profileErrorAt TEXT,
+    profileErrorMessage TEXT,
+    profileRetryAfter TEXT,
+    profileFailureCount INTEGER NOT NULL DEFAULT 0,
+    emails TEXT,
+    emailSources TEXT,
+    UNIQUE(name, url)
+  )`);
+
+  await run("CREATE INDEX IF NOT EXISTS idx_djs_name ON djs(name)");
+  await run("CREATE INDEX IF NOT EXISTS idx_djs_url ON djs(url)");
+  await run("CREATE INDEX IF NOT EXISTS idx_djs_emails_present ON djs(emails) WHERE emails IS NOT NULL AND emails <> '' AND emails <> '[]'");
+
+  const columns = await getTableColumns('djs');
+  await addColumnIfMissing('djs', columns, 'lastUpdated', 'lastUpdated DATE');
+  await addColumnIfMissing('djs', columns, 'emails', 'emails TEXT');
+  await addColumnIfMissing('djs', columns, 'emailSources', 'emailSources TEXT');
+  await addColumnIfMissing('djs', columns, 'profileUpdatedAt', 'profileUpdatedAt TEXT');
+  await addColumnIfMissing('djs', columns, 'emailsUpdatedAt', 'emailsUpdatedAt TEXT');
+  await addColumnIfMissing('djs', columns, 'magicSyncedAt', 'magicSyncedAt TEXT');
+  await addColumnIfMissing('djs', columns, 'profileErrorAt', 'profileErrorAt TEXT');
+  await addColumnIfMissing('djs', columns, 'profileErrorMessage', 'profileErrorMessage TEXT');
+  await addColumnIfMissing('djs', columns, 'profileRetryAfter', 'profileRetryAfter TEXT');
+  await addColumnIfMissing('djs', columns, 'profileFailureCount', 'profileFailureCount INTEGER NOT NULL DEFAULT 0');
+}
+
+async function ensurePipelineRunsSchema() {
+  await run(`CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running'
+      CHECK (status IN ('running', 'success', 'failed', 'stopped')),
+    duration_ms INTEGER,
+    start_letter TEXT,
+    djs_found INTEGER NOT NULL DEFAULT 0,
+    new_djs INTEGER NOT NULL DEFAULT 0,
+    profiles_updated INTEGER NOT NULL DEFAULT 0,
+    emails_found INTEGER NOT NULL DEFAULT 0,
+    emails_queued_for_magic INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
+  await run("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status_finished ON pipeline_runs(status, finished_at)");
+}
+
 async function createSchemaMigrationsTable() {
   await run(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
@@ -226,8 +288,9 @@ async function runSchemaMigration(id, description, migrationFn) {
   return true;
 }
 
-async function initializeSchemaMigrations() {
+async function initializeDatabaseSchema() {
   await createSchemaMigrationsTable();
+  await ensureDjsSchema();
 
   await runSchemaMigration(
     '2026-06-17-magic-emailer-sync-schema',
@@ -240,169 +303,12 @@ async function initializeSchemaMigrations() {
 
   await run(createMagicEmailerSyncTableSql());
   await ensureMagicEmailerSyncSchema();
+  await ensurePipelineRunsSchema();
 }
 
-const schemaReady = initializeSchemaMigrations().catch(error => {
+const schemaReady = initializeDatabaseSchema().catch(error => {
   console.error('Database schema initialization failed:', error.message);
   throw error;
-});
-
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS djs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    url TEXT,
-    country TEXT,
-    socialMediaUrls TEXT,
-    musicStyles TEXT,
-    lastUpdated DATE,
-    profileUpdatedAt TEXT,
-    emailsUpdatedAt TEXT,
-    magicSyncedAt TEXT,
-    profileErrorAt TEXT,
-    profileErrorMessage TEXT,
-    profileRetryAfter TEXT,
-    profileFailureCount INTEGER NOT NULL DEFAULT 0,
-    emails TEXT,
-    emailSources TEXT,
-    UNIQUE(name, url)
-  )`, (err) => {
-    if (err) {
-      console.error('Error creating table:', err.message);
-    }
-  });
-
-  db.run("CREATE INDEX IF NOT EXISTS idx_djs_name ON djs(name)", (err) => {
-    if (err) {
-      console.error('Error creating djs name index:', err.message);
-    }
-  });
-
-  db.run("CREATE INDEX IF NOT EXISTS idx_djs_url ON djs(url)", (err) => {
-    if (err) {
-      console.error('Error creating djs url index:', err.message);
-    }
-  });
-
-  db.run("CREATE INDEX IF NOT EXISTS idx_djs_emails_present ON djs(emails) WHERE emails IS NOT NULL AND emails <> '' AND emails <> '[]'", (err) => {
-    if (err) {
-      console.error('Error creating djs emails index:', err.message);
-    }
-  });
-
-  db.all("PRAGMA table_info(djs)", (err, rows) => {
-    if (err) {
-      console.error('Error checking table schema:', err.message);
-    } else {
-      const columns = rows.map(row => row.name);
-      if (!columns.includes('lastUpdated')) {
-        db.run("ALTER TABLE djs ADD COLUMN lastUpdated DATE", (err) => {
-          if (err) {
-            console.error('Error adding column lastUpdated:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('emails')) {
-        db.run("ALTER TABLE djs ADD COLUMN emails TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column emails:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('emailSources')) {
-        db.run("ALTER TABLE djs ADD COLUMN emailSources TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column emailSources:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('profileUpdatedAt')) {
-        db.run("ALTER TABLE djs ADD COLUMN profileUpdatedAt TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column profileUpdatedAt:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('emailsUpdatedAt')) {
-        db.run("ALTER TABLE djs ADD COLUMN emailsUpdatedAt TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column emailsUpdatedAt:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('magicSyncedAt')) {
-        db.run("ALTER TABLE djs ADD COLUMN magicSyncedAt TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column magicSyncedAt:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('profileErrorAt')) {
-        db.run("ALTER TABLE djs ADD COLUMN profileErrorAt TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column profileErrorAt:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('profileErrorMessage')) {
-        db.run("ALTER TABLE djs ADD COLUMN profileErrorMessage TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column profileErrorMessage:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('profileRetryAfter')) {
-        db.run("ALTER TABLE djs ADD COLUMN profileRetryAfter TEXT", (err) => {
-          if (err) {
-            console.error('Error adding column profileRetryAfter:', err.message);
-          }
-        });
-      }
-      if (!columns.includes('profileFailureCount')) {
-        db.run("ALTER TABLE djs ADD COLUMN profileFailureCount INTEGER NOT NULL DEFAULT 0", (err) => {
-          if (err) {
-            console.error('Error adding column profileFailureCount:', err.message);
-          }
-        });
-      }
-    }
-  });
-
-  db.run(createMagicEmailerSyncTableSql(), (err) => {
-    if (err) {
-      console.error('Error creating magic_emailer_sync table:', err.message);
-    }
-  });
-
-  ensureMagicEmailerSyncSchema();
-
-  db.run(`CREATE TABLE IF NOT EXISTS pipeline_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    status TEXT NOT NULL DEFAULT 'running'
-      CHECK (status IN ('running', 'success', 'failed', 'stopped')),
-    duration_ms INTEGER,
-    start_letter TEXT,
-    djs_found INTEGER NOT NULL DEFAULT 0,
-    new_djs INTEGER NOT NULL DEFAULT 0,
-    profiles_updated INTEGER NOT NULL DEFAULT 0,
-    emails_found INTEGER NOT NULL DEFAULT 0,
-    emails_queued_for_magic INTEGER NOT NULL DEFAULT 0,
-    error_summary TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )`, (err) => {
-    if (err) {
-      console.error('Error creating pipeline_runs table:', err.message);
-    }
-  });
-
-  db.run("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status_finished ON pipeline_runs(status, finished_at)", (err) => {
-    if (err) {
-      console.error('Error creating pipeline_runs status index:', err.message);
-    }
-  });
 });
 
 function mapPipelineRun(row) {
@@ -977,8 +883,18 @@ function getMagicEmailerSyncStats() {
   });
 }
 
+function closeDatabase() {
+  return new Promise((resolve, reject) => {
+    db.close(err => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
 module.exports = {
   schemaReady,
+  closeDatabase,
   insertDJ,
   checkDJExists,
   updateDJ,
