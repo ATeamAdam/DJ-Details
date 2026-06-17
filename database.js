@@ -127,35 +127,28 @@ function createMagicEmailerSyncTableSql(tableName = 'magic_emailer_sync') {
   )`;
 }
 
-function createMagicEmailerSyncIndexes() {
-  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_status ON magic_emailer_sync(status, updated_at)", (err) => {
-    if (err) {
-      console.error('Error creating magic_emailer_sync status index:', err.message);
-    }
-  });
-
-  db.run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_retry_after ON magic_emailer_sync(status, retry_after)", (err) => {
-    if (err) {
-      console.error('Error creating magic_emailer_sync retry_after index:', err.message);
-    }
-  });
+async function createMagicEmailerSyncIndexes() {
+  await run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_status ON magic_emailer_sync(status, updated_at)");
+  await run("CREATE INDEX IF NOT EXISTS idx_magic_emailer_sync_retry_after ON magic_emailer_sync(status, retry_after)");
 }
 
-function addMagicEmailerRetryAfterColumn() {
-  db.run("ALTER TABLE magic_emailer_sync ADD COLUMN retry_after TEXT", (err) => {
-    if (err && !String(err.message || '').includes('duplicate column name')) {
-      console.error('Error adding magic_emailer_sync retry_after column:', err.message);
-    }
-  });
+async function addColumnIfMissing(tableName, columns, columnName, columnSql) {
+  if (columns.includes(columnName)) return;
+  await run(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql}`);
 }
 
-function migrateMagicEmailerSyncStatuses(hasRetryAfter) {
+async function getTableColumns(tableName) {
+  const rows = await all(`PRAGMA table_info(${tableName})`);
+  return rows.map(row => row.name);
+}
+
+async function migrateMagicEmailerSyncStatuses(hasRetryAfter) {
   const backupTable = `magic_emailer_sync_backup_${Date.now()}`;
-  db.serialize(() => {
-    db.run("BEGIN TRANSACTION");
-    db.run(`ALTER TABLE magic_emailer_sync RENAME TO ${backupTable}`);
-    db.run(createMagicEmailerSyncTableSql('magic_emailer_sync'));
-    db.run(
+  try {
+    await run("BEGIN IMMEDIATE TRANSACTION");
+    await run(`ALTER TABLE magic_emailer_sync RENAME TO ${backupTable}`);
+    await run(createMagicEmailerSyncTableSql('magic_emailer_sync'));
+    await run(
       `INSERT INTO magic_emailer_sync (
          email,
          status,
@@ -182,49 +175,77 @@ function migrateMagicEmailerSyncStatuses(hasRetryAfter) {
          updated_at
        FROM ${backupTable}`
     );
-    db.run(`DROP TABLE ${backupTable}`);
-    db.run("COMMIT", (err) => {
-      if (err) {
-        console.error('Error migrating magic_emailer_sync table:', err.message);
-        db.run("ROLLBACK");
-      } else {
-        createMagicEmailerSyncIndexes();
-      }
-    });
-  });
-}
-
-function ensureMagicEmailerSyncSchema() {
-  db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'magic_emailer_sync'", (err, row) => {
-    if (err) {
-      console.error('Error reading magic_emailer_sync schema:', err.message);
-      return;
+    await run(`DROP TABLE ${backupTable}`);
+    await run("COMMIT");
+    await createMagicEmailerSyncIndexes();
+  } catch (error) {
+    try {
+      await run("ROLLBACK");
+    } catch (rollbackError) {
+      console.error('Error rolling back magic_emailer_sync migration:', rollbackError.message);
     }
-
-    db.all("PRAGMA table_info(magic_emailer_sync)", (tableErr, rows) => {
-      if (tableErr) {
-        console.error('Error checking magic_emailer_sync columns:', tableErr.message);
-        return;
-      }
-
-      const tableSql = row?.sql || '';
-      const columns = rows.map(column => column.name);
-      const hasRetryAfter = columns.includes('retry_after');
-      const needsStatusMigration = tableSql && !tableSql.includes("'skipped_already_exists'");
-
-      if (needsStatusMigration) {
-        migrateMagicEmailerSyncStatuses(hasRetryAfter);
-        return;
-      }
-
-      if (!hasRetryAfter) {
-        addMagicEmailerRetryAfterColumn();
-      }
-
-      createMagicEmailerSyncIndexes();
-    });
-  });
+    throw error;
+  }
 }
+
+async function ensureMagicEmailerSyncSchema() {
+  const row = await get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'magic_emailer_sync'");
+  const tableSql = row?.sql || '';
+  const columns = await getTableColumns('magic_emailer_sync');
+  const hasRetryAfter = columns.includes('retry_after');
+  const needsStatusMigration = tableSql && !tableSql.includes("'skipped_already_exists'");
+
+  if (needsStatusMigration) {
+    await migrateMagicEmailerSyncStatuses(hasRetryAfter);
+    return;
+  }
+
+  await addColumnIfMissing('magic_emailer_sync', columns, 'retry_after', 'retry_after TEXT');
+  await createMagicEmailerSyncIndexes();
+}
+
+async function createSchemaMigrationsTable() {
+  await run(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    description TEXT,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+}
+
+async function runSchemaMigration(id, description, migrationFn) {
+  const existing = await get("SELECT id FROM schema_migrations WHERE id = ?", [id]);
+  if (existing) {
+    return false;
+  }
+
+  await migrationFn();
+  await run(
+    "INSERT INTO schema_migrations (id, description, applied_at) VALUES (?, ?, datetime('now'))",
+    [id, description]
+  );
+  return true;
+}
+
+async function initializeSchemaMigrations() {
+  await createSchemaMigrationsTable();
+
+  await runSchemaMigration(
+    '2026-06-17-magic-emailer-sync-schema',
+    'Ensure Magic Emailer sync schema supports retry budgets and skipped contacts',
+    async () => {
+      await run(createMagicEmailerSyncTableSql());
+      await ensureMagicEmailerSyncSchema();
+    }
+  );
+
+  await run(createMagicEmailerSyncTableSql());
+  await ensureMagicEmailerSyncSchema();
+}
+
+const schemaReady = initializeSchemaMigrations().catch(error => {
+  console.error('Database schema initialization failed:', error.message);
+  throw error;
+});
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS djs (
@@ -935,6 +956,7 @@ function getMagicEmailerSyncStats() {
 }
 
 module.exports = {
+  schemaReady,
   insertDJ,
   checkDJExists,
   updateDJ,

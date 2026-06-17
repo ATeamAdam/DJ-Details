@@ -44,7 +44,7 @@ Current priority tasks
     - scrapingComplete/full pipeline complete
     Ensure this does not break progress, reconnect snapshots, or stop handling.
 
-[ ] Harden SQLite migrations and schema bootstrapping.
+[x] Harden SQLite migrations and schema bootstrapping.
     Replace ad-hoc callback migration chains with promise-backed, transactional migrations.
     Add a schema version table or migration ledger.
     Add migration safety for:
