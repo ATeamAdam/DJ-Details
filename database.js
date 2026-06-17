@@ -840,11 +840,26 @@ function buildMagicSyncDiscovery(dj, email) {
 
 async function queueMagicEmailerSyncContacts() {
   const rows = await all(`
-    SELECT *
-    FROM djs
-    WHERE emails IS NOT NULL
-      AND emails <> ''
-      AND emails <> '[]'
+    SELECT DISTINCT d.*
+    FROM djs d
+    WHERE d.emails IS NOT NULL
+      AND d.emails <> ''
+      AND d.emails <> '[]'
+      AND (
+        d.magicSyncedAt IS NULL
+        OR d.emailsUpdatedAt IS NULL
+        OR datetime(d.emailsUpdatedAt) > datetime(d.magicSyncedAt)
+        OR EXISTS (
+          SELECT 1
+          FROM magic_emailer_sync s
+          WHERE d.emails LIKE '%' || s.email || '%'
+            AND s.status IN ('pending', 'failed')
+            AND (
+              s.retry_after IS NULL
+              OR datetime(s.retry_after) <= datetime('now')
+            )
+        )
+      )
   `);
 
   const summary = {
@@ -856,7 +871,8 @@ async function queueMagicEmailerSyncContacts() {
     skippedAlreadyExists: 0,
     retryDelayed: 0,
     roleEmails: 0,
-    invalidEmails: 0
+    invalidEmails: 0,
+    markedSyncedDjs: 0
   };
 
   for (const dj of rows) {
@@ -929,6 +945,12 @@ async function queueMagicEmailerSyncContacts() {
         summary.queued++;
       }
     }
+
+    await run(
+      "UPDATE djs SET magicSyncedAt = datetime('now') WHERE id = ?",
+      [dj.id]
+    );
+    summary.markedSyncedDjs++;
   }
 
   return summary;

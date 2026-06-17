@@ -53,7 +53,7 @@ Current priority tasks
     - pipeline_runs table
     Migrations should fail clearly and avoid leaving renamed/half-migrated tables behind.
 
-[ ] Make Magic Emailer queueing incremental.
+[x] Make Magic Emailer queueing incremental. Completed 2026-06-17.
     queueMagicEmailerSyncContacts currently scans all DJs with emails and then skips synced contacts.
     Change it to process only contacts likely to need queue work:
     - DJs with emailsUpdatedAt newer than magicSyncedAt
