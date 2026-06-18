@@ -39,6 +39,7 @@ const schedulerEnabled = String(process.env.PIPELINE_SCHEDULER_ENABLED || '1').t
 const schedulerDay = String(process.env.PIPELINE_SCHEDULER_DAY || 'tuesday').toLowerCase();
 const schedulerTime = String(process.env.PIPELINE_SCHEDULER_TIME || '02:00');
 const schedulerStartLetter = String(process.env.PIPELINE_SCHEDULER_START_LETTER || 'resume').toLowerCase();
+const MAX_SCHEDULER_TIMEOUT_MS = 2147483647;
 const pipelineStageOrder = {
   idle: 0,
   scraper: 0,
@@ -346,6 +347,32 @@ function getNextScheduledRunDate(fromDate = new Date()) {
 
   next.setDate(next.getDate() + daysUntilTarget);
   return next;
+}
+
+function getSafeSchedulerDelayMs(nextRunAt) {
+  const now = Date.now();
+
+  if (!(nextRunAt instanceof Date) || Number.isNaN(nextRunAt.getTime())) {
+    console.warn('Invalid scheduler run date. Rescheduling to next expected run window.');
+    return 1000;
+  }
+
+  const rawDelayMs = nextRunAt.getTime() - now;
+  if (!Number.isFinite(rawDelayMs)) {
+    console.warn(`Invalid scheduler delay value (${String(rawDelayMs)}). Rescheduling shortly.`);
+    return 1000;
+  }
+
+  if (rawDelayMs <= 1000) {
+    return 1000;
+  }
+
+  if (rawDelayMs > MAX_SCHEDULER_TIMEOUT_MS) {
+    console.warn(`Scheduler delay ${rawDelayMs}ms exceeds Node timer limit. Clamping to safe maximum.`);
+    return MAX_SCHEDULER_TIMEOUT_MS;
+  }
+
+  return rawDelayMs;
 }
 
 function getSchedulerSnapshot() {
@@ -679,7 +706,7 @@ function scheduleNextPipelineRun() {
 
   schedulerNextRunAt = getNextScheduledRunDate();
   schedulerLastStatus = schedulerLastStatus || 'scheduled';
-  const delayMs = Math.max(1000, schedulerNextRunAt.getTime() - Date.now());
+  const delayMs = getSafeSchedulerDelayMs(schedulerNextRunAt);
 
   schedulerTimer = setTimeout(() => {
     void runScheduledPipeline();
